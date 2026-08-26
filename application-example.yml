@@ -1,0 +1,22 @@
+# Copy this file to application.yml beside the executable jar.
+# The external file is useful for local SQL directories and deployment-specific settings.
+
+server:
+  port: 8080
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
+
+spring:
+  application:
+    name: sql-metadata-viewer
+
+metadata:
+  # Relative paths are resolved beside the executable jar.
+  sql-directory: .
+  annotation-database: metadata.sqlite
+  # Optional explicit file lists. Leave empty to scan the SQL directory.
+  table-files: []
+  procedure-files: []

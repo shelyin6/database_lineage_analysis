@@ -1,0 +1,14 @@
+server:
+  port: 8080
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
+
+spring:
+  application:
+    name: sql-metadata-viewer
+
+metadata:
+  annotation-database: metadata.sqlite

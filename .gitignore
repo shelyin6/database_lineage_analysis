@@ -1,0 +1,65 @@
+# Build output
+target/
+dist/
+*.class
+*.jar
+*.jar.original
+hs_err_pid*
+replay_pid*
+
+# Local runtime data
+metadata.sqlite
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.db-shm
+*.db-wal
+
+# Local configuration and secrets
+/application.yml
+/application.yaml
+/application.properties
+/config/application.yml
+/config/application.yaml
+/config/application.properties
+*.env
+.env*
+!.env.example
+
+# Business SQL files
+*.sql
+!src/**/*.sql
+!examples/**/*.sql
+
+# Internal analysis notes and generated reports
+batch-list-comparison.md
+batch1-procedure-dependencies.md
+manual-batch-list.md
+rerun-batch-lineage.md
+system-batch-list.md
+SQL元数据查看器项目每日日报.md
+数据溯源项目简介.md
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.kate-swp
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# Logs
+*.log
+logs/
+
+# Tooling caches
+.agents/
+.codex/
+.mvn/timing.properties
