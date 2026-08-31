@@ -25,7 +25,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -37,10 +36,12 @@ public class MetadataService {
     private final MetadataProperties properties;
     private final SqlMetadataParser parser = new SqlMetadataParser();
     private final FieldLineageParser fieldLineageParser = new FieldLineageParser();
+    private final SourceFileResolver sourceFileResolver;
     private volatile MetadataSnapshot snapshot;
 
     public MetadataService(MetadataProperties properties) {
         this.properties = properties;
+        this.sourceFileResolver = new SourceFileResolver(properties);
     }
 
     @PostConstruct
@@ -150,17 +151,19 @@ public class MetadataService {
             List<SourceFileSummary> sourceFiles
     ) throws IOException {
         for (String file : properties.getTableFiles()) {
-            String sql = readSql(file);
-            List<TableMetadata> parsed = parser.parseTables(file, sql);
+            SourceFile sourceFile = sourceFileResolver.sourceFile(file, resolveConfiguredPath(file));
+            String sql = readSql(sourceFile.path());
+            List<TableMetadata> parsed = parser.parseTables(sourceFile.metadataPrefix(), sql);
             tables.addAll(parsed);
-            sourceFiles.add(summary(file, "table", sql, parsed.size()));
+            sourceFiles.add(summary(sourceFile, "table", sql, parsed.size()));
         }
 
         for (String file : properties.getProcedureFiles()) {
-            String sql = readSql(file);
-            List<ProcedureMetadata> parsed = parser.parseProcedures(file, sql);
+            SourceFile sourceFile = sourceFileResolver.sourceFile(file, resolveConfiguredPath(file));
+            String sql = readSql(sourceFile.path());
+            List<ProcedureMetadata> parsed = parser.parseProcedures(sourceFile.metadataPrefix(), sql);
             procedures.addAll(parsed);
-            sourceFiles.add(summary(file, "procedure", sql, parsed.size()));
+            sourceFiles.add(summary(sourceFile, "procedure", sql, parsed.size()));
         }
     }
 
@@ -174,20 +177,15 @@ public class MetadataService {
             throw new IOException("SQL directory does not exist: " + directory);
         }
 
-        List<Path> files;
-        try (Stream<Path> paths = Files.list(directory)) {
-            files = paths.filter(Files::isRegularFile)
-                    .filter(path -> path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".sql"))
-                    .sorted(Comparator.comparing(path -> path.getFileName().toString(), String.CASE_INSENSITIVE_ORDER))
-                    .toList();
-        }
+        List<Path> files = sourceFileResolver.listSqlFiles(directory);
         if (files.isEmpty()) {
             throw new IOException("No .sql files found in: " + directory);
         }
 
         for (Path path : files) {
-            String file = path.getFileName().toString();
-            String sql = Files.readString(path, StandardCharsets.UTF_8);
+            SourceFile sourceFile = sourceFileResolver.sourceFile(path);
+            String file = sourceFile.metadataPrefix();
+            String sql = Files.readString(sourceFile.path(), StandardCharsets.UTF_8);
             List<ProcedureMetadata> detectedProcedures = parser.parseProcedures(file, sql);
             List<TableMetadata> parsedTables;
             List<ProcedureMetadata> parsedProcedures;
@@ -200,13 +198,20 @@ public class MetadataService {
             }
             tables.addAll(parsedTables);
             procedures.addAll(parsedProcedures);
-            sourceFiles.add(summary(file, sourceKind(parsedTables.size(), parsedProcedures.size()), sql,
+            sourceFiles.add(summary(sourceFile, sourceKind(parsedTables.size(), parsedProcedures.size()), sql,
                     parsedTables.size() + parsedProcedures.size()));
         }
     }
 
-    private String readSql(String file) throws IOException {
-        Path path = properties.effectiveSqlDirectory().resolve(file).normalize();
+    private Path resolveConfiguredPath(String file) {
+        Path path = Path.of(file);
+        if (path.isAbsolute() || file.length() > 0 && file.charAt(0) == '.') {
+            return path;
+        }
+        return properties.effectiveSqlDirectory().resolve(path);
+    }
+
+    private String readSql(Path path) throws IOException {
         return Files.readString(path, StandardCharsets.UTF_8);
     }
 
@@ -228,9 +233,9 @@ public class MetadataService {
         return normalized.contains("proc") || normalized.contains("procedure");
     }
 
-    private SourceFileSummary summary(String file, String kind, String sql, int objectCount) {
+    private SourceFileSummary summary(SourceFile sourceFile, String kind, String sql, int objectCount) {
         return new SourceFileSummary(
-                file,
+                sourceFile.display(),
                 kind,
                 sql.getBytes(StandardCharsets.UTF_8).length,
                 sql.split("\\R", -1).length,

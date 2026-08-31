@@ -13,39 +13,7 @@ public class MetadataProperties {
     private List<String> tableFiles = new ArrayList<>();
     private List<String> procedureFiles = new ArrayList<>();
 
-    public Path getSqlDirectory() {
-        return sqlDirectory;
-    }
-
-    public void setSqlDirectory(Path sqlDirectory) {
-        this.sqlDirectory = sqlDirectory;
-    }
-
-    public Path getAnnotationDatabase() {
-        return annotationDatabase;
-    }
-
-    public void setAnnotationDatabase(Path annotationDatabase) {
-        this.annotationDatabase = annotationDatabase;
-    }
-
-    public List<String> getTableFiles() {
-        return tableFiles;
-    }
-
-    public void setTableFiles(List<String> tableFiles) {
-        this.tableFiles = tableFiles == null ? new ArrayList<>() : tableFiles;
-    }
-
-    public List<String> getProcedureFiles() {
-        return procedureFiles;
-    }
-
-    public void setProcedureFiles(List<String> procedureFiles) {
-        this.procedureFiles = procedureFiles == null ? new ArrayList<>() : procedureFiles;
-    }
-
-    public Path applicationDirectory() {
+    public synchronized Path applicationDirectory() {
         return findApplicationDirectory();
     }
 
@@ -78,4 +46,37 @@ public class MetadataProperties {
                 ? value.normalize()
                 : applicationDirectory().resolve(value).normalize();
     }
+
+    public Path getSqlDirectory() {
+        return sqlDirectory;
+    }
+
+    public void setSqlDirectory(Path sqlDirectory) {
+        this.sqlDirectory = sqlDirectory;
+    }
+
+    public Path getAnnotationDatabase() {
+        return annotationDatabase;
+    }
+
+    public void setAnnotationDatabase(Path annotationDatabase) {
+        this.annotationDatabase = annotationDatabase;
+    }
+
+    public List<String> getTableFiles() {
+        return tableFiles;
+    }
+
+    public void setTableFiles(List<String> tableFiles) {
+        this.tableFiles = tableFiles == null ? new ArrayList<>() : tableFiles;
+    }
+
+    public List<String> getProcedureFiles() {
+        return procedureFiles;
+    }
+
+    public void setProcedureFiles(List<String> procedureFiles) {
+        this.procedureFiles = procedureFiles == null ? new ArrayList<>() : procedureFiles;
+    }
+
 }

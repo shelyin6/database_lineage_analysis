@@ -11,7 +11,7 @@ Manual table remarks and field code values are stored locally in `metadata.sqlit
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE).
 
-Before publishing a repository to GitHub, review [OPEN_SOURCE_RELEASE_CHECKLIST.md](OPEN_SOURCE_RELEASE_CHECKLIST.md). Do not publish real business SQL files, SQLite runtime databases, generated jars, internal analysis reports, credentials, cookies, or environment-specific configuration files.
+Project documentation lives under `docs/`. See [GitHub Open Source Notes](docs/数据溯源项目简介.md) and the Chinese project introduction at [数据溯源项目简介-zh.md](docs/数据溯源项目简介-zh.md). Do not publish real business SQL files, SQLite runtime databases, generated jars, internal analysis reports, credentials, cookies, or environment-specific configuration files.
 
 The bundled Vue runtime keeps its own license notice under `src/main/resources/static/vendor/vue.LICENSE.txt`.
 
@@ -60,6 +60,8 @@ java -jar sql-metadata-viewer-0.0.1-SNAPSHOT.jar
 By default, the application scans every `.sql` file directly beside the jar. It parses tables and procedures from each file. `metadata.sqlite` is also written beside the jar.
 
 Copy `application-example.yml` to `application.yml` beside the jar when a port, SQL directory, database path, or explicit file list needs to be configured. A file under `config/application.yml` is also loaded automatically.
+
+Relative paths in `metadata.sql-directory` and `metadata.annotation-database` are resolved beside the executable jar. Entries in `metadata.table-files` and `metadata.procedure-files` are resolved under `sql-directory` when they are relative; absolute entries are used as-is.
 
 For example:
 

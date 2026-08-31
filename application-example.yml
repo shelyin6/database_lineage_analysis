@@ -17,6 +17,6 @@ metadata:
   # Relative paths are resolved beside the executable jar.
   sql-directory: .
   annotation-database: metadata.sqlite
-  # Optional explicit file lists. Leave empty to scan the SQL directory.
+  # Optional explicit file lists. Relative entries are resolved under sql-directory.
   table-files: []
   procedure-files: []
