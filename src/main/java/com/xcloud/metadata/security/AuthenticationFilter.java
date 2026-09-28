@@ -16,7 +16,12 @@ public class AuthenticationFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI().substring(request.getContextPath().length());
-        return !path.startsWith("/api/") || "/api/auth/login".equals(path) || "OPTIONS".equals(request.getMethod());
+        return !path.startsWith("/api/")
+                || "/api/auth/login".equals(path)
+                // Deployment self-check: sanitized only (masked endpoint, driver class, pool/cache
+                // counters), so it can be opened directly in a browser without a session.
+                || "/api/catalog/status".equals(path)
+                || "OPTIONS".equals(request.getMethod());
     }
 
     @Override

@@ -12,3 +12,7 @@ spring:
 
 metadata:
   annotation-database: metadata.sqlite
+  # 二期只读数据库接入（Inceptor），默认关闭；开启示例见 application-example.yml
+  # inceptor:
+  #   enabled: false
+  #   url: jdbc:inceptor2://10.0.0.9:10000/system

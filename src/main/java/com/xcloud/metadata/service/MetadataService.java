@@ -25,10 +25,14 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 @Service
 public class MetadataService {
+    private static final Logger LOG = LoggerFactory.getLogger(MetadataService.class);
+
     private static final java.util.Set<String> DATA_FLOW_IGNORED_PROCEDURES = java.util.Set.of(
             "ALMP.PROC_ALMP_ADD_PARTITION"
     );
@@ -45,8 +49,27 @@ public class MetadataService {
     }
 
     @PostConstruct
-    public void loadOnStartup() throws IOException {
-        reload();
+    public void loadOnStartup() {
+        try {
+            reload();
+        } catch (IOException exception) {
+            // An offline deployment that only uses the database catalogue has no local .sql files.
+            // Report it and start with an empty file based snapshot instead of refusing to boot.
+            LOG.warn("启动时未加载本地 SQL 文件：{}（仅使用数据库存储过程目录时可忽略）", exception.getMessage());
+            snapshot = emptySnapshot();
+        }
+    }
+
+    private MetadataSnapshot emptySnapshot() {
+        return new MetadataSnapshot(
+                Instant.now(),
+                List.of(),
+                List.of(),
+                List.of(),
+                Map.of(),
+                Map.of(),
+                Map.of(),
+                Map.of());
     }
 
     public synchronized MetadataSnapshot reload() throws IOException {

@@ -15,9 +15,9 @@ public class AuthenticationService {
             "210000$4DKoHrnMNwVI8NMoMkXYuw==$kz5eqJoWsiqDgv53idnM3yOU60tsUSv2/zIUQY6FtVM=";
     private static final Map<String, Account> ACCOUNTS = Map.of(
             "admin", new Account("admin", "系统管理员", "ADMIN",
-                    "210000$9KxcFcaa988pqIyKhsjruw==$vZb4HCHI7QtCQ2kjcx6YCK2PtW86rLJ8CUfk1kodM6E="),
+                    "21000$84e/rWjMpEfLnhkXjHB+tw==$pGuiERqycxorpq++JrhyXWBS2b9mEAvN45jWgrDMklA="),
             "almp", new Account("almp", "ALMP 分析员", "USER",
-                    "210000$lntvp6LSGI7bF23w8oFedA==$2cs6PFGNre7gSxTV4z+zZVfIJdCksJWj+34d7dIyhbk="),
+                    "21000$84e/rWjMpEfLnhkXjHB+tw==$pGuiERqycxorpq++JrhyXWBS2b9mEAvN45jWgrDMklA="),
             "ids", new Account("ids", "IDS 分析员", "USER",
                     "210000$BUYLaJS+98GUR7BwJAX13w==$kgB7B5I4kY8LLbCfSxCfZT+9gnFJUK0qP4Bc6RYwpRM="),
             "analyst", new Account("analyst", "数据分析员", "USER",

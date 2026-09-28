@@ -46,7 +46,11 @@ class SourceFileResolverTest {
         SourceFileResolver resolver = new SourceFileResolver(properties);
         Path outside = Files.createTempFile("external", ".sql");
         try {
-            assertEquals(outside.toAbsolutePath().normalize().toString(), resolver.sourceFile(null, outside).display());
+            // Display paths always use '/' so they can be shown in the UI and used in URLs; on
+            // Windows the native form would use '\'.
+            assertEquals(
+                    outside.toAbsolutePath().normalize().toString().replace(java.io.File.separatorChar, '/'),
+                    resolver.sourceFile(null, outside).display());
         } finally {
             Files.deleteIfExists(outside);
         }

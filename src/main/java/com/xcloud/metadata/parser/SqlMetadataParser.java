@@ -94,6 +94,21 @@ public class SqlMetadataParser {
     }
 
     public List<ProcedureMetadata> parseProcedures(String sourceFile, String sql) {
+        return parseProcedures(sourceFile, null, sql);
+    }
+
+    /**
+     * Same as {@link #parseProcedures(String, String)} but with an explicit fallback schema.
+     *
+     * <p>Database sources know the schema (for example {@code ads} from
+     * {@code system.procedures_v.database_name}), a file name usually does not. Passing it here keeps
+     * unqualified table names in the procedure body attached to the right schema instead of guessing
+     * from the file name.
+     */
+    public List<ProcedureMetadata> parseProcedures(String sourceFile, String defaultSchema, String sql) {
+        String fallbackSchema = defaultSchema == null || defaultSchema.isBlank()
+                ? inferSchema(sourceFile)
+                : defaultSchema;
         int[] lineStarts = lineStarts(sql);
         List<ProcedureStart> starts = new ArrayList<>();
         Matcher matcher = PROCEDURE_PATTERN.matcher(sql);
@@ -110,7 +125,7 @@ public class SqlMetadataParser {
                 continue;
             }
 
-            NameParts name = splitName(start.rawName(), inferSchema(sourceFile));
+            NameParts name = splitName(start.rawName(), fallbackSchema);
             String qualifiedName = qualify(name.schema(), name.name());
             int startLine = lineOf(lineStarts, start.start());
             int endLine = lineOf(lineStarts, Math.max(start.start(), end - 1));

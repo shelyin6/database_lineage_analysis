@@ -496,7 +496,7 @@ button.metric:hover:not(:disabled) {
 
 .tabs {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr;
     gap: 6px;
     padding: 10px;
     border-bottom: 1px solid var(--line);
@@ -2950,4 +2950,47 @@ pre.source-code {
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
     }
+}
+
+/* 数据库存储过程目录（二期只读接入）*/
+.catalog-status {
+    margin: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel-muted);
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.7;
+}
+
+.catalog-status strong {
+    color: var(--text);
+}
+
+.catalog-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.catalog-actions button {
+    padding: 4px 10px;
+    font-size: 12px;
+}
+
+.catalog-error {
+    margin: 0 10px 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--danger);
+    border-radius: 8px;
+    background: var(--danger-soft);
+    color: var(--danger);
+    font-size: 12px;
+}
+
+.catalog-progress {
+    margin: 8px 10px;
+    color: var(--muted);
+    font-size: 12px;
 }

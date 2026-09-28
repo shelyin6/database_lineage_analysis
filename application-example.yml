@@ -20,3 +20,41 @@ metadata:
   # Optional explicit file lists. Relative entries are resolved under sql-directory.
   table-files: []
   procedure-files: []
+
+  # ---------------------------------------------------------------------------------------------
+  # 二期：只读接入 Inceptor 元数据表 system.procedures_v（默认关闭，只发 SELECT）
+  #
+  # 1) 驱动 jar（例如 inceptor-sdk-4.7.0.jar）放到 <jar 所在目录>/lib/，不要打进发布包；
+  #    驱动由隔离类加载器读取，因此不需要 -Dloader.path，也不会与 Logback 冲突。
+  # 2) 账号使用专用只读账号；口令建议放在环境变量里，用 ${...} 占位符引用。
+  # 3) 打开后可用 GET /api/catalog/status 查看驱动/连接池/缓存，用
+  #    GET /api/catalog/status/verify 做连通性自检。
+  # ---------------------------------------------------------------------------------------------
+  inceptor:
+    enabled: false
+    url: jdbc:inceptor2://10.0.0.9:10000/system
+    driver-class-name: org.apache.hive.jdbc.HiveDriver
+    driver-dir: lib
+    username: ""
+    password: "${OSDA_INCEPTOR_PASSWORD:}"
+    procedure-table: system.procedures_v
+    # 单次数据库操作的上限；超时返回 504 而不是让页面一直转圈
+    connect-timeout-seconds: 10
+    query-timeout-seconds: 30
+    request-timeout-seconds: 60
+    # 列表查询默认不读 full_text（读 LOB 约 0.75 秒/行），也不在数据库端排序
+    include-text-length: false
+    sort-results: false
+    # 连接池：会话建立约 0.1~0.6 秒，复用后列表查询约 0.3 秒
+    pool-size: 2
+    connection-idle-seconds: 300
+    connection-wait-millis: 5000
+    # 源码缓存：full_text 一次读取约 4~5 秒，命中后接近 0
+    cache-enabled: true
+    cache-max-entries: 200
+    cache-max-bytes: 67108864
+    cache-ttl-seconds: 1800
+    cache-verify-version: true
+    # 单次查询返回行数 / 单次批量分析过程数上限
+    max-rows: 200
+    max-analyze-procedures: 20

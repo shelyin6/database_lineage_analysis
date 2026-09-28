@@ -61,8 +61,9 @@ class MetadataServicePathIntegrationTest {
         service.reload();
 
         SourceFileSummary source = service.snapshot().sourceFiles().get(0);
-        assertEquals(file.toAbsolutePath().normalize().toString(), source.path());
-        assertEquals(file.toAbsolutePath().normalize().toString(), service.snapshot().procedures().get(0).sourceFile());
+        String expected = file.toAbsolutePath().normalize().toString().replace(java.io.File.separatorChar, '/');
+        assertEquals(expected, source.path());
+        assertEquals(expected, service.snapshot().procedures().get(0).sourceFile());
         assertEquals("IDS", service.snapshot().procedures().get(0).schema());
     }
 

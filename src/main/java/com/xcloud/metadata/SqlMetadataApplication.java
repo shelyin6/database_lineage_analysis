@@ -1,6 +1,7 @@
 package com.xcloud.metadata;
 
 import com.xcloud.metadata.config.MetadataProperties;
+import com.xcloud.metadata.inceptor.InceptorProperties;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -10,7 +11,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 
 @SpringBootApplication
-    @EnableConfigurationProperties(MetadataProperties.class)
+@EnableConfigurationProperties({MetadataProperties.class, InceptorProperties.class})
 public class SqlMetadataApplication {
     public static void main(String[] args) {
         configureExternalConfig();

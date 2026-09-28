@@ -82,6 +82,36 @@ java -jar sql-metadata-viewer-0.0.1-SNAPSHOT.jar
 - 分组且可折叠的表/存储过程导航
 - 多个相互独立的自定义分组主题，支持多级分组，例如业务主题和业务线主题
 - 收藏、字段筛选、深色主题和详情聚焦模式
+- “数据库”页签：只读接入 Inceptor 元数据表，按存储过程名（模糊/精确）检索并直接给出目标表、来源表、参数、头部注释与原始 SQL
+
+## 从元数据库读取存储过程（可选，默认关闭）
+
+除本地 SQL 文件外，还可以只读接入 Inceptor 的存储过程元数据表 `system.procedures_v`：在
+“数据库”页签里输入存储过程名（支持模糊查询），选中后即可看到与本地文件模式一致的解析结果。
+
+1. 把 Inceptor 驱动 jar（例如 `inceptor-sdk-4.7.0.jar`）放到 jar 同级目录的 `lib/` 下。
+   驱动由隔离类加载器加载，因此**不需要** `-Dloader.path`，也不会和应用的 Logback/SLF4J 冲突，
+   并且不打进发布包。
+2. 把 `application-example.yml` 复制为 jar 同级目录的 `application.yml`，打开
+   `metadata.inceptor.enabled` 并填好 `url`、`username`、`password`（口令建议写成
+   `${环境变量}` 占位符）。
+3. 在 jar 所在目录启动应用，然后依次访问：
+
+- `GET /api/catalog/status`：免登录自检，显示 enabled、驱动来源、连接池与源码缓存统计
+- `GET /api/catalog/status/verify`：连通性自检（只发一条 SELECT）
+- `GET /api/catalog/procedures?keyword=p_loan&limit=20`：模糊查询过程名（不读 `full_text`）
+- `GET /api/catalog/procedures/{database}/{name}/profile`：读取源码并解析（第二次命中缓存）
+- `POST /api/catalog/analyze?keyword=p_loan`：批量分析匹配过程，返回去重后的目标表/来源表
+- `POST /api/catalog/cache/clear`：清空源码缓存
+
+针对远程元数据库的取数优化（内网实测依据）：
+
+- **连接复用**：建立会话约 0.1~0.6 秒，连接池复用后列表查询约 0.3 秒；
+- **源码缓存**：`full_text` 单次读取约 4~5 秒（底表是 dblink 虚拟视图），缓存命中后接近 0，
+  以 `create_time` 作为版本标记，并用 TTL 兜住“原过程被原地修改”的情况；
+- **请求超时**：`request-timeout-seconds` 到点立即放弃等待并返回 504，页面不会假死，
+  同时用信号量限制并发，避免超时请求在数据库侧堆积；
+- **列表查询**：默认不取 `full_text`、不在库端排序，避免约 0.75 秒/行的 LOB 读取代价。
 
 ## API
 
@@ -97,6 +127,12 @@ java -jar sql-metadata-viewer-0.0.1-SNAPSHOT.jar
 - `GET /api/columns/lineage?table=...&column=...&maxDepth=...`
 - `GET /api/procedures?q=&schema=`
 - `GET /api/procedures/detail?id=...`
+- `GET /api/catalog/status`（免登录）
+- `GET /api/catalog/status/verify`
+- `GET /api/catalog/procedures?keyword=&database=&owner=&exact=&limit=`
+- `GET /api/catalog/procedures/{database}/{name}/profile`
+- `POST /api/catalog/analyze?keyword=&database=&owner=&exact=&limit=`
+- `POST /api/catalog/cache/clear`
 - `GET /api/annotations/overview?themeId=...`
 - `POST /api/custom-group-themes`
 - `DELETE /api/custom-group-themes/{id}`
