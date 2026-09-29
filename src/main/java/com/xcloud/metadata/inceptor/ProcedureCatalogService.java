@@ -2,6 +2,8 @@ package com.xcloud.metadata.inceptor;
 
 import com.xcloud.metadata.model.ProcedureMetadata;
 import com.xcloud.metadata.parser.SqlMetadataParser;
+import com.xcloud.metadata.service.MetadataService;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -35,16 +37,22 @@ public class ProcedureCatalogService {
     private final InceptorProperties properties;
     private final InceptorProcedureRepository repository;
     private final JdbcQueryExecutor queryExecutor;
+    private final InceptorCatalogIndex catalogIndex;
+    private final MetadataService metadataService;
     private final SqlMetadataParser parser = new SqlMetadataParser();
 
     public ProcedureCatalogService(
             InceptorProperties properties,
             InceptorProcedureRepository repository,
-            JdbcQueryExecutor queryExecutor
+            JdbcQueryExecutor queryExecutor,
+            InceptorCatalogIndex catalogIndex,
+            MetadataService metadataService
     ) {
         this.properties = properties;
         this.repository = repository;
         this.queryExecutor = queryExecutor;
+        this.catalogIndex = catalogIndex;
+        this.metadataService = metadataService;
     }
 
     public CatalogStatus status() {
@@ -62,13 +70,64 @@ public class ProcedureCatalogService {
                 properties.getPoolSize(),
                 properties.getConnectionIdleSeconds(),
                 CatalogStatus.Pool.of(repository.poolStats()),
-                CatalogStatus.Cache.of(repository.cacheStats()));
+                CatalogStatus.Cache.of(repository.cacheStats()),
+                CatalogStatus.Index.of(catalogIndex.stats(), catalogIndex.indexFile().toAbsolutePath().toString()));
     }
 
     /** Drops every cached source text; the next preview/analysis reads from the database again. */
     public CatalogStatus clearCache() {
         repository.clearCache();
         LOG.info("源码缓存已清空（下一次查看源码将重新读取 full_text）");
+        return status();
+    }
+
+    /**
+     * Drops the parsed procedures (and optionally the catalogue) from the local index; the viewer
+     * then falls back to the local .sql files only.
+     */
+    public CatalogStatus clearIndex(boolean includeCatalogue) {
+        if (includeCatalogue) {
+            catalogIndex.clearAll();
+        } else {
+            catalogIndex.clearParsed();
+        }
+        reloadSnapshot();
+        return status();
+    }
+
+    /**
+     * Reads the procedure catalogue (metadata only, no {@code full_text}) and stores it in the index,
+     * which is what fills the 存储过程 tab with database procedures.
+     *
+     * @param keyword  optional name filter; blank walks the whole catalogue
+     * @param database optional database filter such as {@code ads}
+     * @param owner    optional owner filter such as {@code hive}
+     */
+    public CatalogStatus refreshCatalogue(
+            String keyword,
+            String database,
+            String owner,
+            boolean exact,
+            Integer limit
+    ) {
+        requireEnabled();
+        int cap = effectiveCatalogueLimit(limit);
+        long startedAt = System.nanoTime();
+        try {
+            List<CatalogProcedureSummary> rows = queryExecutor.execute(
+                    "刷新存储过程目录",
+                    requestTimeoutMillis(),
+                    () -> repository.search(keyword, database, owner, exact, cap).stream()
+                            .map(CatalogProcedureSummary::of)
+                            .toList());
+            catalogIndex.replaceCatalogue(rows);
+            reloadSnapshot();
+            LOG.info("存储过程目录已刷新：{} 条（keyword={}, database={}, owner={}, 上限={}），耗时 {}ms",
+                    rows.size(), keyword, database, owner, cap, (System.nanoTime() - startedAt) / 1_000_000L);
+        } catch (RuntimeException exception) {
+            catalogIndex.setLastError(exception.getMessage());
+            throw exception;
+        }
         return status();
     }
 
@@ -116,6 +175,10 @@ public class ProcedureCatalogService {
                     + " 的 full_text 为空（可能未同步或被加密），无法分析");
         }
         ParsedSource parsed = parse(row, text);
+        // Parsing a procedure is what links the database source with the rest of the viewer: the
+        // result is stored in the index and merged into the snapshot (tables, 目标表 / 来源表, 血缘).
+        catalogIndex.putParsed(parsed.metadata());
+        reloadSnapshot();
         return new CatalogProcedureProfile(
                 row.databaseName(),
                 row.procedureName(),
@@ -129,6 +192,17 @@ public class ProcedureCatalogService {
                 parsed.headerAdded(),
                 (System.nanoTime() - startedAt) / 1_000_000L,
                 parsed.metadata());
+    }
+
+    /**
+     * Reads, parses and indexes one procedure named by its database and name.
+     *
+     * <p>Used when the user opens a "尚未解析" row in the 存储过程 tab: the detail view then shows the
+     * same analysis as the file based flow, and the parsed result stays in the index so the 表 tab and
+     * the lineage views pick it up.
+     */
+    public ProcedureMetadata indexProcedure(String databaseName, String procedureName) {
+        return profile(databaseName, procedureName).analysis();
     }
 
     /**
@@ -180,12 +254,14 @@ public class ProcedureCatalogService {
             }
             ProcedureMetadata metadata = parse(loaded, text).metadata();
             procedures.add(metadata);
+            catalogIndex.putParsed(metadata);
             targetTables.addAll(metadata.targetTables());
             sourceTables.addAll(metadata.sourceTables());
         }
         if (procedures.isEmpty()) {
             throw new ProcedureNotFoundException("未获取到可用源码：" + String.join("；", skipped));
         }
+        reloadSnapshot();
 
         boolean fromCache = repository.cacheStats().hits() > hitsBefore;
         LOG.info("批量分析：匹配={} 个，分析={} 个，截断={}，缓存命中={}，总计={}ms（full_text 不打印）",
@@ -251,6 +327,30 @@ public class ProcedureCatalogService {
 
     private long requestTimeoutMillis() {
         return Math.max(1, properties.getRequestTimeoutSeconds()) * 1000L;
+    }
+
+    /**
+     * Catalogue refresh bound: {@code catalogue-max-entries} when set, otherwise the normal row
+     * limit. A name-only query is cheap, so the whole catalogue can be loaded in one go.
+     */
+    private int effectiveCatalogueLimit(Integer requestedLimit) {
+        int max = properties.getCatalogueMaxEntries() > 0
+                ? properties.getCatalogueMaxEntries()
+                : Math.max(1, properties.getMaxRows());
+        if (requestedLimit == null || requestedLimit <= 0) {
+            return max;
+        }
+        return Math.min(requestedLimit, max);
+    }
+
+    /** Rebuilds the snapshot so the new index entries show up in the UI (file parsing is cheap). */
+    private void reloadSnapshot() {
+        try {
+            metadataService.reload();
+        } catch (IOException exception) {
+            LOG.warn("重新合并元数据快照失败：{}（数据库过程目录仍已写入索引 {}）",
+                    exception.getMessage(), catalogIndex.indexFile());
+        }
     }
 
     private int effectiveLimit(Integer requestedLimit) {

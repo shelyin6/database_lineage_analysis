@@ -1,6 +1,7 @@
 package com.xcloud.metadata.service;
 
 import com.xcloud.metadata.config.MetadataProperties;
+import com.xcloud.metadata.inceptor.InceptorCatalogIndex;
 import com.xcloud.metadata.model.ColumnLineage;
 import com.xcloud.metadata.model.ColumnLineageTreeNode;
 import com.xcloud.metadata.model.MetadataSnapshot;
@@ -27,6 +28,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -38,13 +40,25 @@ public class MetadataService {
     );
 
     private final MetadataProperties properties;
+    private final InceptorCatalogIndex catalogIndex;
     private final SqlMetadataParser parser = new SqlMetadataParser();
     private final FieldLineageParser fieldLineageParser = new FieldLineageParser();
     private final SourceFileResolver sourceFileResolver;
     private volatile MetadataSnapshot snapshot;
 
     public MetadataService(MetadataProperties properties) {
+        this(properties, null);
+    }
+
+    /**
+     * Spring wiring: the database procedure index is merged into every snapshot, so procedures read
+     * from {@code system.procedures_v} appear in the same 存储过程 / 表 / 血缘 views as the ones parsed
+     * from local .sql files.
+     */
+    @Autowired
+    public MetadataService(MetadataProperties properties, InceptorCatalogIndex catalogIndex) {
         this.properties = properties;
+        this.catalogIndex = catalogIndex;
         this.sourceFileResolver = new SourceFileResolver(properties);
     }
 
@@ -77,12 +91,20 @@ public class MetadataService {
         List<ProcedureMetadata> procedures = new ArrayList<>();
         List<SourceFileSummary> sourceFiles = new ArrayList<>();
 
-        if (usesConfiguredFileLists()) {
-            loadConfiguredFiles(tables, procedures, sourceFiles);
-        } else {
-            loadAllSqlFiles(tables, procedures, sourceFiles);
+        try {
+            if (usesConfiguredFileLists()) {
+                loadConfiguredFiles(tables, procedures, sourceFiles);
+            } else {
+                loadAllSqlFiles(tables, procedures, sourceFiles);
+            }
+        } catch (IOException exception) {
+            // An intranet deployment that only uses the database catalogue has no local .sql files.
+            // Keep going: the snapshot still gets the procedures/tables from the database index, and
+            // the missing file configuration is reported instead of failing the whole reload.
+            LOG.warn("读取本地 SQL 文件失败：{}（继续使用数据库过程目录，快照可能为空）", exception.getMessage());
         }
 
+        appendDatabaseCatalogue(tables, procedures, sourceFiles);
         procedures = parser.linkProcedureCalls(procedures);
         tables.sort(Comparator.comparing(TableMetadata::schema).thenComparing(TableMetadata::name).thenComparing(TableMetadata::sourceFile));
         procedures.sort(Comparator.comparing(ProcedureMetadata::schema).thenComparing(ProcedureMetadata::name).thenComparing(ProcedureMetadata::sourceFile));
@@ -115,6 +137,90 @@ public class MetadataService {
                 columnLineageByTargetTable
         );
         return snapshot;
+    }
+
+    /**
+     * Adds the database catalogue to the file based snapshot.
+     *
+     * <p>Procedures whose source text was already read and parsed contribute their target/source
+     * tables (the table list and the lineage index are built from them). Procedures that are only
+     * known by name are added as "尚未解析" rows so the 存储过程 tab is not empty; their source text is
+     * read on demand when the user opens them.
+     *
+     * <p>Tables that are only referenced by database procedures get a thin entry (name and evidence,
+     * no columns) so they can be searched and traced like any other table.
+     */
+    private void appendDatabaseCatalogue(
+            List<TableMetadata> tables,
+            List<ProcedureMetadata> procedures,
+            List<SourceFileSummary> sourceFiles
+    ) {
+        if (catalogIndex == null) {
+            return;
+        }
+        InceptorCatalogIndex.Stats stats = catalogIndex.stats();
+        if (stats.catalogueSize() == 0 && stats.parsedSize() == 0) {
+            return;
+        }
+
+        java.util.Set<String> knownProcedures = procedures.stream()
+                .map(procedure -> normalize(procedure.qualifiedName()))
+                .collect(Collectors.toCollection(java.util.LinkedHashSet::new));
+        for (ProcedureMetadata procedure : catalogIndex.parsedProcedures()) {
+            if (knownProcedures.add(normalize(procedure.qualifiedName()))) {
+                procedures.add(procedure);
+            }
+        }
+        for (ProcedureMetadata placeholder : catalogIndex.placeholderProcedures()) {
+            if (knownProcedures.add(normalize(placeholder.qualifiedName()))) {
+                procedures.add(placeholder);
+            }
+        }
+
+        java.util.Set<String> knownTables = tables.stream()
+                .map(table -> normalize(table.qualifiedName()))
+                .collect(Collectors.toCollection(java.util.LinkedHashSet::new));
+        for (ProcedureMetadata procedure : procedures) {
+            if (!InceptorCatalogIndex.isDatabaseProcedure(procedure)) {
+                continue;
+            }
+            for (String table : procedure.referencedTables()) {
+                if (knownTables.add(normalize(table))) {
+                    tables.add(thinTable(procedure, table));
+                }
+            }
+        }
+
+        sourceFiles.add(new SourceFileSummary(
+                "inceptor://" + stats.catalogueSize() + " procedures",
+                "inceptor",
+                0,
+                0,
+                stats.parsedSize()));
+    }
+
+    /**
+     * Table known only from a database procedure: it has no CREATE TABLE statement, therefore no
+     * column metadata. The evidence points at the procedure so a DBA can check where it came from.
+     */
+    private TableMetadata thinTable(ProcedureMetadata procedure, String qualifiedTable) {
+        String normalized = normalize(qualifiedTable);
+        int dot = normalized.lastIndexOf('.');
+        String schema = dot > 0 ? normalized.substring(0, dot) : "PUBLIC";
+        String name = dot > 0 ? normalized.substring(dot + 1) : normalized;
+        return new TableMetadata(
+                InceptorCatalogIndex.SOURCE_PREFIX + normalized,
+                schema,
+                name,
+                schema + "." + name,
+                null,
+                procedure.sourceFile(),
+                1,
+                1,
+                null,
+                null,
+                List.of(),
+                "");
     }
 
     public MetadataSnapshot snapshot() {

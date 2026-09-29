@@ -20,7 +20,8 @@ public record CatalogStatus(
         int poolSize,
         int connectionIdleSeconds,
         Pool pool,
-        Cache cache
+        Cache cache,
+        Index index
 ) {
 
     public record Pool(
@@ -64,6 +65,31 @@ public record CatalogStatus(
                     stats.misses(),
                     stats.evictions(),
                     stats.hitPercent());
+        }
+    }
+
+    /**
+     * State of the local procedure index that links the database catalogue with the 存储过程 / 表 /
+     * 血缘 views: how many procedure names are known, how many were parsed and when.
+     */
+    public record Index(
+            int catalogueSize,
+            int parsedSize,
+            int pendingSize,
+            String catalogueLoadedAt,
+            String parsedUpdatedAt,
+            String indexFile,
+            String lastError
+    ) {
+        static Index of(InceptorCatalogIndex.Stats stats, String indexFile) {
+            return new Index(
+                    stats.catalogueSize(),
+                    stats.parsedSize(),
+                    stats.pendingSize(),
+                    stats.catalogueLoadedAt() == null ? "" : stats.catalogueLoadedAt().toString(),
+                    stats.parsedUpdatedAt() == null ? "" : stats.parsedUpdatedAt().toString(),
+                    indexFile,
+                    stats.lastError() == null ? "" : stats.lastError());
         }
     }
 }

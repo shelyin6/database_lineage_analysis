@@ -99,6 +99,27 @@ public class InceptorProperties {
     /** Hard upper bound for one batch analysis request. */
     private int maxAnalyzeProcedures = 20;
 
+    /**
+     * Load the procedure catalogue into the project index right after start up.
+     *
+     * <p>The catalogue is a metadata-only query (no {@code full_text}), so this is cheap; it is what
+     * makes the "存储过程" tab show database procedures instead of only local .sql files. The refresh
+     * runs on a background thread and never blocks or fails the start up.
+     */
+    private boolean catalogueRefreshOnStartup = true;
+
+    /** Hard upper bound for one catalogue refresh; 0 means "use max-rows". */
+    private int catalogueMaxEntries = 10000;
+
+    /**
+     * File holding the catalogue and the already parsed procedures, so the index survives a restart
+     * without reading {@code full_text} again. Relative paths are resolved beside the application.
+     */
+    private String indexFile = "inceptor-index.json";
+
+    /** Hard upper bound for the number of parsed procedures kept in the index. */
+    private int indexMaxEntries = 2000;
+
     public boolean isEnabled() {
         return enabled;
     }
@@ -273,5 +294,37 @@ public class InceptorProperties {
 
     public void setMaxAnalyzeProcedures(int maxAnalyzeProcedures) {
         this.maxAnalyzeProcedures = maxAnalyzeProcedures;
+    }
+
+    public boolean isCatalogueRefreshOnStartup() {
+        return catalogueRefreshOnStartup;
+    }
+
+    public void setCatalogueRefreshOnStartup(boolean catalogueRefreshOnStartup) {
+        this.catalogueRefreshOnStartup = catalogueRefreshOnStartup;
+    }
+
+    public int getCatalogueMaxEntries() {
+        return catalogueMaxEntries;
+    }
+
+    public void setCatalogueMaxEntries(int catalogueMaxEntries) {
+        this.catalogueMaxEntries = catalogueMaxEntries;
+    }
+
+    public String getIndexFile() {
+        return indexFile;
+    }
+
+    public void setIndexFile(String indexFile) {
+        this.indexFile = indexFile;
+    }
+
+    public int getIndexMaxEntries() {
+        return indexMaxEntries;
+    }
+
+    public void setIndexMaxEntries(int indexMaxEntries) {
+        this.indexMaxEntries = indexMaxEntries;
     }
 }

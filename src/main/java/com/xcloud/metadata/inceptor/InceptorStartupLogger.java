@@ -22,10 +22,16 @@ public class InceptorStartupLogger implements ApplicationRunner {
 
     private final InceptorProperties properties;
     private final InceptorDriverLoader driverLoader;
+    private final InceptorCatalogIndex catalogIndex;
 
-    public InceptorStartupLogger(InceptorProperties properties, InceptorDriverLoader driverLoader) {
+    public InceptorStartupLogger(
+            InceptorProperties properties,
+            InceptorDriverLoader driverLoader,
+            InceptorCatalogIndex catalogIndex
+    ) {
         this.properties = properties;
         this.driverLoader = driverLoader;
+        this.catalogIndex = catalogIndex;
     }
 
     @Override
@@ -50,6 +56,11 @@ public class InceptorStartupLogger implements ApplicationRunner {
         } else {
             LOG.info("数据库接入未启用（metadata.inceptor.enabled=false）：外部 application.yml 需放在"
                     + "工作目录、jar 所在目录或其 config/ 子目录下，命令行参数优先级最高");
+        }
+        InceptorCatalogIndex.Stats stats = catalogIndex.stats();
+        if (stats.catalogueSize() > 0 || stats.parsedSize() > 0) {
+            LOG.info("数据库过程索引：目录 {} 条，已解析 {} 条，待解析 {} 条（{}）",
+                    stats.catalogueSize(), stats.parsedSize(), stats.pendingSize(), catalogIndex.indexFile());
         }
     }
 

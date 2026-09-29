@@ -58,3 +58,11 @@ metadata:
     # 单次查询返回行数 / 单次批量分析过程数上限
     max-rows: 200
     max-analyze-procedures: 20
+    # 启动后在后台刷新一次过程目录（只查过程名，不读 full_text），
+    # 这样“存储过程”页签会直接列出库里的过程，而不是只剩本地 SQL 文件
+    catalogue-refresh-on-startup: true
+    catalogue-max-entries: 10000
+    # 过程目录 + 已解析过程 的本地索引文件（相对路径按启动目录解析）；
+    # 解析结果落盘后，重启不用再读一次 full_text
+    index-file: inceptor-index.json
+    index-max-entries: 2000

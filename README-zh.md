@@ -86,8 +86,17 @@ java -jar sql-metadata-viewer-0.0.1-SNAPSHOT.jar
 
 ## 从元数据库读取存储过程（可选，默认关闭）
 
-除本地 SQL 文件外，还可以只读接入 Inceptor 的存储过程元数据表 `system.procedures_v`：在
-“数据库”页签里输入存储过程名（支持模糊查询），选中后即可看到与本地文件模式一致的解析结果。
+除本地 SQL 文件外，还可以只读接入 Inceptor 的存储过程元数据表 `system.procedures_v`。
+接入后库里的过程会**并入项目原有的索引**，和本地 `.sql` 文件解析出来的对象放在同一个
+“存储过程 / 表 / 目标表 / 来源表 / 血缘”视图里使用：
+
+- 启动时后台刷新一次**过程目录**（只查过程名/拥有者/创建时间，不读 `full_text`），
+  所以“存储过程”页签会直接列出库里的过程，不会因为是内网无本地 SQL 文件而空白；
+- 每个过程默认标记为**未解析**，点开它时才读取源码并用同一套解析器分析（首次约 4~5 秒，之后走缓存），
+  解析结果写回索引并立即出现在表列表、目标表/来源表与血缘视图中；
+- 也可以在“数据库”页签按名称/库/拥有者筛选后点**解析并索引匹配过程**，批量把过程并入索引；
+- 过程目录与解析结果保存在 `inceptor-index.json`（见 `metadata.inceptor.index-file`），
+  重启后不需要重新读取 `full_text`。
 
 1. 把 Inceptor 驱动 jar（例如 `inceptor-sdk-4.7.0.jar`）放到 jar 同级目录的 `lib/` 下。
    驱动由隔离类加载器加载，因此**不需要** `-Dloader.path`，也不会和应用的 Logback/SLF4J 冲突，
@@ -132,6 +141,8 @@ java -jar sql-metadata-viewer-0.0.1-SNAPSHOT.jar
 - `GET /api/catalog/procedures?keyword=&database=&owner=&exact=&limit=`
 - `GET /api/catalog/procedures/{database}/{name}/profile`
 - `POST /api/catalog/analyze?keyword=&database=&owner=&exact=&limit=`
+- `POST /api/catalog/refresh?keyword=&database=&owner=&exact=&limit=`：刷新过程目录（只查元数据）
+- `POST /api/catalog/index/clear?catalogue=true|false`：清空已解析过程（可选连目录一起清）
 - `POST /api/catalog/cache/clear`
 - `GET /api/annotations/overview?themeId=...`
 - `POST /api/custom-group-themes`

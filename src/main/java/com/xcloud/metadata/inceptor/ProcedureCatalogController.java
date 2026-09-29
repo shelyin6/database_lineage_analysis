@@ -87,4 +87,33 @@ public class ProcedureCatalogController {
     public CatalogStatus clearCache() {
         return service.clearCache();
     }
+
+    /**
+     * Loads the procedure catalogue (name/owner/create time only, no source text) into the local
+     * index, which is what makes database procedures appear in the 存储过程 tab. A blank condition
+     * walks the whole catalogue, bounded by {@code metadata.inceptor.catalogue-max-entries}.
+     */
+    @PostMapping("/refresh")
+    public CatalogStatus refresh(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String database,
+            @RequestParam(required = false) String owner,
+            @RequestParam(defaultValue = "false") boolean exact,
+            @RequestParam(required = false) Integer limit
+    ) {
+        return service.refreshCatalogue(keyword, database, owner, exact, limit);
+    }
+
+    /**
+     * Drops the locally indexed procedures.
+     *
+     * @param catalogue when true the procedure names are dropped as well, so the 存储过程 tab falls
+     *                  back to the local .sql files only
+     */
+    @PostMapping("/index/clear")
+    public CatalogStatus clearIndex(
+            @RequestParam(name = "catalogue", defaultValue = "false") boolean includeCatalogue
+    ) {
+        return service.clearIndex(includeCatalogue);
+    }
 }

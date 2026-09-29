@@ -43,6 +43,8 @@ createApp({
             catalogError: "",
             catalogElapsedMs: 0,
             catalogClearing: false,
+            catalogRefreshing: false,
+            detailLoading: false,
             tableCommentDraft: "",
             codeValueDrafts: {},
             annotationEditing: false,
@@ -746,11 +748,35 @@ createApp({
         async selectProcedure(procedure, options = {}) {
             this.selectedTable = null;
             this.procedureFocusLine = Number(options.focusLine || 0);
-            this.selectedProcedure = await this.getDetail("procedures", procedure.id);
+            this.detailLoading = true;
+            try {
+                this.selectedProcedure = await this.getDetail("procedures", procedure.id);
+            } finally {
+                this.detailLoading = false;
+            }
             if (this.procedureFocusLine > 0) {
                 this.$nextTick(() => this.scrollToProcedureLine(this.procedureFocusLine));
             }
             this.syncHistory(options.history === "none" ? "none" : "push");
+        },
+        async refreshCatalogIndex() {
+            this.loading = true;
+            this.catalogRefreshing = true;
+            this.catalogError = "";
+            try {
+                const params = new URLSearchParams();
+                if (this.query.trim()) params.set("keyword", this.query.trim());
+                if (this.catalogDatabase.trim()) params.set("database", this.catalogDatabase.trim());
+                if (this.catalogOwner.trim()) params.set("owner", this.catalogOwner.trim());
+                if (this.catalogExact) params.set("exact", "true");
+                this.catalogStatus = await this.getJson(`/api/catalog/refresh?${params.toString()}`, { method: "POST" });
+                this.showSuccess(`已刷新过程目录：${this.catalogStatus.index.catalogueSize} 条，可在“存储过程”页签查看`);
+            } catch (error) {
+                this.catalogError = error.message;
+            } finally {
+                this.catalogRefreshing = false;
+                this.loading = false;
+            }
         },
         async loadCatalogStatus() {
             try {
@@ -822,6 +848,7 @@ createApp({
                 this.selectedProcedure = null;
                 this.catalogSelected = null;
                 this.catalogProfile = null;
+                this.showSuccess(`已解析并索引 ${this.catalogBatch.analyzed} 个过程，结果已并入“存储过程/表”页签`);
             } catch (error) {
                 this.catalogBatch = null;
                 this.catalogError = error.message;
@@ -844,6 +871,12 @@ createApp({
         catalogActive(item) {
             return this.catalogSelected?.databaseName === item.databaseName
                 && this.catalogSelected?.procedureName === item.procedureName;
+        },
+        isDatabaseProcedureItem(procedure) {
+            return String(procedure?.sourceFile || "").startsWith("inceptor://");
+        },
+        isUnparsedProcedure(procedure) {
+            return this.isDatabaseProcedureItem(procedure) && String(procedure?.description || "").startsWith("尚未解析");
         },
         tableActive(table) {
             return this.selectedTable?.table?.id === table.id;
@@ -2177,8 +2210,11 @@ createApp({
                         <input type="checkbox" v-model="catalogExact" @change="search">
                         精确匹配
                     </label>
+                    <button v-if="activeTab === 'catalog'" type="button" class="text-button" :disabled="loading || catalogRefreshing" @click="refreshCatalogIndex">
+                        {{ catalogRefreshing ? "刷新中…" : "刷新过程目录" }}
+                    </button>
                     <button v-if="activeTab === 'catalog'" type="button" class="text-button" :disabled="loading" @click="analyzeCatalogBatch">
-                        分析匹配过程
+                        解析并索引匹配过程
                     </button>
                     <select v-if="activeTab === 'tables'" v-model="relation" @change="search">
                         <option value="">全部关联状态</option>
@@ -2216,6 +2252,10 @@ createApp({
                                 <div>驱动：{{ catalogStatus.driverAvailable ? catalogStatus.driverDescription : "未加载（" + catalogStatus.driverDirectory + "）" }}</div>
                                 <div>连接池：复用 {{ catalogStatus.pool.reusePercent }}%（复用 {{ catalogStatus.pool.reused }} / 借用 {{ catalogStatus.pool.borrowed }}，创建 {{ catalogStatus.pool.created }}，上限 {{ catalogStatus.pool.maxSize }}）</div>
                                 <div>源码缓存：命中 {{ catalogStatus.cache.hitPercent }}%（命中 {{ catalogStatus.cache.hits }} / 未命中 {{ catalogStatus.cache.misses }}，条目 {{ catalogStatus.cache.entries }}）</div>
+                                <div>过程目录（“存储过程”页签）：{{ catalogStatus.index.catalogueSize }} 条，已解析 {{ catalogStatus.index.parsedSize }}，待解析 {{ catalogStatus.index.pendingSize }}</div>
+                                <div v-if="catalogStatus.index.catalogueLoadedAt">目录刷新时间 {{ formatDateTime(catalogStatus.index.catalogueLoadedAt) }}</div>
+                                <div v-else class="muted">过程目录尚未刷新，启动后会自动刷新一次</div>
+                                <div v-if="catalogStatus.index.lastError" class="catalog-error">{{ catalogStatus.index.lastError }}</div>
                                 <div>本次列表耗时 {{ catalogElapsedMs }} ms · 单次请求上限 {{ catalogStatus.requestTimeoutSeconds }} 秒</div>
                                 <div class="catalog-actions">
                                     <button type="button" @click="loadCatalogStatus">刷新统计</button>
@@ -2291,11 +2331,13 @@ createApp({
                                         <span class="badge">{{ procedure.schema }}</span>
                                         <span>{{ procedure.name }}</span>
                                         <span v-if="isFavorite(procedure)" class="favorite-indicator" title="已收藏" aria-label="已收藏">★</span>
+                                        <span v-if="isUnparsedProcedure(procedure)" class="status-badge">未解析</span>
                                         <span v-if="isAdjusted('PROCEDURE', procedure)" class="status-badge adjustment">调整</span>
                                     </div>
                                     <div class="object-comment">{{ procedure.title || procedure.description || "无过程说明" }}</div>
                                     <div class="object-meta">
-                                        {{ procedure.sourceFile }}:{{ procedure.startLine }} · 参数 {{ procedure.parameterCount }} · 引用表 {{ procedure.referencedTableCount }} · 调用 {{ procedure.calledProcedureCount }}
+                                        <template v-if="isUnparsedProcedure(procedure)">来自数据库 · 点开后读取源码并解析</template>
+                                        <template v-else>{{ procedure.sourceFile }}:{{ procedure.startLine }} · 参数 {{ procedure.parameterCount }} · 引用表 {{ procedure.referencedTableCount }} · 调用 {{ procedure.calledProcedureCount }}</template>
                                     </div>
                                 </button>
                             </template>
@@ -2557,6 +2599,7 @@ createApp({
 
                 <div class="detail-body">
                     <div v-if="!selectedTable && !selectedProcedure" class="empty">从左侧选择表或存储过程查看详情</div>
+                    <div v-if="detailLoading && !selectedProcedure" class="empty">正在读取过程源码并解析（首次约 4~5 秒，之后走缓存）…</div>
 
                     <section class="section" v-if="activeTab === 'catalog' && catalogProfile">
                         <div class="section-title"><h3>数据库来源</h3></div>

@@ -10,6 +10,8 @@ import com.xcloud.metadata.model.SourceFileSummary;
 import com.xcloud.metadata.model.TableMetadata;
 import com.xcloud.metadata.service.MetadataService;
 import com.xcloud.metadata.service.AnnotationStore;
+import com.xcloud.metadata.inceptor.InceptorCatalogIndex;
+import com.xcloud.metadata.inceptor.ProcedureCatalogService;
 import com.xcloud.metadata.security.AuthUser;
 import com.xcloud.metadata.security.AuthenticationSession;
 import jakarta.servlet.http.HttpServletRequest;
@@ -37,10 +39,16 @@ import org.springframework.web.server.ResponseStatusException;
 public class MetadataController {
     private final MetadataService metadataService;
     private final AnnotationStore annotationStore;
+    private final ProcedureCatalogService catalogService;
 
-    public MetadataController(MetadataService metadataService, AnnotationStore annotationStore) {
+    public MetadataController(
+            MetadataService metadataService,
+            AnnotationStore annotationStore,
+            ProcedureCatalogService catalogService
+    ) {
         this.metadataService = metadataService;
         this.annotationStore = annotationStore;
+        this.catalogService = catalogService;
     }
 
     @GetMapping("/summary")
@@ -338,8 +346,20 @@ public class MetadataController {
         if (!present(lookup)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "id or name is required");
         }
-        return metadataService.findProcedure(lookup)
+        ProcedureMetadata procedure = metadataService.findProcedure(lookup)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Procedure not found: " + lookup));
+        if (needsDatabaseSource(procedure)) {
+            // "尚未解析" row from the database catalogue: read the source text through the cache,
+            // parse it with the same analyzer, and index it so the tables and lineage views see it.
+            return catalogService.indexProcedure(procedure.schema(), procedure.name());
+        }
+        return procedure;
+    }
+
+    /** True for a database procedure whose source text has not been read yet. */
+    private static boolean needsDatabaseSource(ProcedureMetadata procedure) {
+        return InceptorCatalogIndex.isDatabaseProcedure(procedure)
+                && (procedure.rawSql() == null || procedure.rawSql().isBlank());
     }
 
     private static TableListItem tableListItem(TableMetadata table, MetadataSnapshot snapshot, Map<String, AnnotationStore.TableProfile> profiles) {
