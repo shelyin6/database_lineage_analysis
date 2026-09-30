@@ -203,13 +203,20 @@ public class InceptorCatalogIndex {
 
     public Stats stats() {
         synchronized (lock) {
+            java.util.TreeSet<String> databases = new java.util.TreeSet<>();
+            for (CatalogProcedureSummary row : catalogue.values()) {
+                if (row.databaseName() != null && !row.databaseName().isBlank()) {
+                    databases.add(row.databaseName().trim().toUpperCase(Locale.ROOT));
+                }
+            }
             return new Stats(
                     catalogue.size(),
                     parsed.size(),
                     Math.max(0, catalogue.size() - parsed.size()),
                     catalogueLoadedAt,
                     parsedUpdatedAt,
-                    lastError);
+                    lastError,
+                    List.copyOf(databases));
         }
     }
 
@@ -232,7 +239,11 @@ public class InceptorCatalogIndex {
         return value == null ? "" : value.replace("\"", "").replaceAll("\\s+", "").toUpperCase(Locale.ROOT);
     }
 
-    private ProcedureMetadata placeholder(CatalogProcedureSummary row) {
+    /**
+     * "尚未解析" row: the catalogue knows the procedure but its source text has not been read yet, so
+     * the counts are zero and {@code rawSql} is empty (that is the marker for reading it on demand).
+     */
+    public static ProcedureMetadata placeholder(CatalogProcedureSummary row) {
         String database = normalizeName(row.databaseName());
         String name = normalizeName(row.procedureName());
         if (database.isBlank()) {
@@ -326,7 +337,8 @@ public class InceptorCatalogIndex {
             int pendingSize,
             Instant catalogueLoadedAt,
             Instant parsedUpdatedAt,
-            String lastError
+            String lastError,
+            List<String> databases
     ) {
     }
 }

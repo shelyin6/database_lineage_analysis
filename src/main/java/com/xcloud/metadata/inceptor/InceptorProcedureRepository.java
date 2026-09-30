@@ -81,16 +81,20 @@ public class InceptorProcedureRepository {
     /**
      * Searches procedures by name.
      *
-     * @param keyword      procedure name; fuzzy match by default, exact match when {@code exact} is true
-     * @param databaseName optional database filter, for example {@code ads}
-     * @param ownerName    optional owner filter, for example {@code hive}
+     * @param keyword        procedure name; fuzzy match by default, exact match when {@code exact} is true
+     * @param databaseName   optional database filter, for example {@code ads}
+     * @param ownerName      optional owner filter, for example {@code hive}
+     * @param requestedLimit rows the caller would like; {@code null} means "the usual page size"
+     * @param limitCeiling   hard cap for this call: the normal page size for an interactive search,
+     *                       {@code catalogue-max-entries} when the whole catalogue is refreshed
      */
     public List<InceptorProcedureRow> search(
             String keyword,
             String databaseName,
             String ownerName,
             boolean exact,
-            Integer requestedLimit
+            Integer requestedLimit,
+            int limitCeiling
     ) {
         List<Object> arguments = new ArrayList<>();
         List<String> conditions = new ArrayList<>();
@@ -125,7 +129,7 @@ public class InceptorProcedureRepository {
             // ORDER BY forces the engine to sort every matching row; the UI sorts one page locally.
             sql.append(" ORDER BY database_name, procedure_name");
         }
-        int limit = effectiveLimit(requestedLimit);
+        int limit = effectiveLimit(requestedLimit, properties.getMaxRows(), limitCeiling);
         sql.append(" LIMIT ").append(limit);
 
         List<InceptorProcedureRow> rows = new ArrayList<>();
@@ -148,8 +152,8 @@ public class InceptorProcedureRepository {
             }
             return null;
         });
-        LOG.info("列表查询：rows={}，查询={}ms，总计={}ms，连接复用率={}%（keyword={}, exact={}, database={}, owner={}, orderBy={}, textLength={}）",
-                rows.size(), queryMillis[0], elapsedMillis(startedAt), poolStats().reusePercent(),
+        LOG.info("列表查询：rows={}，limit={}，查询={}ms，总计={}ms，连接复用率={}%（keyword={}, exact={}, database={}, owner={}, orderBy={}, textLength={}）",
+                rows.size(), limit, queryMillis[0], elapsedMillis(startedAt), poolStats().reusePercent(),
                 keyword, exact, databaseName, ownerName,
                 properties.isSortResults(), properties.isIncludeTextLength());
         return rows;
@@ -433,12 +437,18 @@ public class InceptorProcedureRepository {
         }
     }
 
-    private int effectiveLimit(Integer requestedLimit) {
-        int max = Math.max(1, properties.getMaxRows());
+    /**
+     * Default page size is {@code max-rows}; an explicit {@code limit} may go up to the ceiling the
+     * caller passes. Without that ceiling a catalogue refresh would silently be cut to one page -
+     * which is exactly why a catalogue of thousands of procedures used to show only 200 rows.
+     */
+    static int effectiveLimit(Integer requestedLimit, int defaultPageSize, int limitCeiling) {
+        int ceiling = Math.max(1, limitCeiling);
+        int fallback = Math.max(1, defaultPageSize);
         if (requestedLimit == null || requestedLimit <= 0) {
-            return max;
+            return Math.min(fallback, ceiling);
         }
-        return Math.min(requestedLimit, max);
+        return Math.min(requestedLimit, ceiling);
     }
 
     /** True when a JDBC driver could be loaded (external driver directory first). */

@@ -119,6 +119,16 @@ createApp({
         activeItemCount() {
             return this.visibleItems.length;
         },
+        schemaOptions() {
+            // With the database source enabled the procedure list is a live query against
+            // system.procedures_v, so the filter has to offer the databases of the catalogue
+            // instead of the schemas of the locally parsed tables.
+            if (this.activeTab === "procedures" && this.databaseProcedureSearch()) {
+                const databases = this.catalogStatus?.index?.databases || [];
+                if (databases.length > 0) return databases;
+            }
+            return this.schemas;
+        },
         adjustmentCount() {
             return this.adjustments.length;
         },
@@ -705,7 +715,7 @@ createApp({
                         this.selectedTable = null;
                     }
                 } else if (this.activeTab === "procedures") {
-                this.procedures = await this.getList("procedures", cacheKey);
+                this.procedures = await this.fetchProcedureList(this.procedureSearchKey());
                 if (this.procedures.length > 0) {
                         const selectable = this.showFavoritesOnly ? this.procedures.filter(item => this.isFavorite(item)) : this.procedures;
                         const selected = this.findListItem(selectable, objectId) || selectable[0];
@@ -748,11 +758,18 @@ createApp({
         async selectProcedure(procedure, options = {}) {
             this.selectedTable = null;
             this.procedureFocusLine = Number(options.focusLine || 0);
+            const wasUnparsed = this.isUnparsedProcedure(procedure);
             this.detailLoading = true;
             try {
                 this.selectedProcedure = await this.getDetail("procedures", procedure.id);
             } finally {
                 this.detailLoading = false;
+            }
+            if (wasUnparsed) {
+                // Reading a database procedure fills in its parameters / referenced tables, and can add
+                // new (inferred) tables. Refresh the visible lists so the left cards show the numbers
+                // right away instead of only after a restart.
+                await this.refreshVisibleList();
             }
             if (this.procedureFocusLine > 0) {
                 this.$nextTick(() => this.scrollToProcedureLine(this.procedureFocusLine));
@@ -771,6 +788,8 @@ createApp({
                 if (this.catalogExact) params.set("exact", "true");
                 this.catalogStatus = await this.getJson(`/api/catalog/refresh?${params.toString()}`, { method: "POST" });
                 this.showSuccess(`已刷新过程目录：${this.catalogStatus.index.catalogueSize} 条，可在“存储过程”页签查看`);
+                this.clearCaches();
+                await this.refreshVisibleList();
             } catch (error) {
                 this.catalogError = error.message;
             } finally {
@@ -834,6 +853,9 @@ createApp({
                 this.syncHistory(options.history === "none" ? "none" : "push");
                 await this.loadCatalogStatus();
             }
+            // Opening a procedure from the database tab indexes it, so the lists of the other tabs are
+            // stale from this point on.
+            this.clearCaches();
         },
         async analyzeCatalogBatch() {
             this.loading = true;
@@ -849,6 +871,8 @@ createApp({
                 this.catalogSelected = null;
                 this.catalogProfile = null;
                 this.showSuccess(`已解析并索引 ${this.catalogBatch.analyzed} 个过程，结果已并入“存储过程/表”页签`);
+                this.clearCaches();
+                await this.refreshVisibleList();
             } catch (error) {
                 this.catalogBatch = null;
                 this.catalogError = error.message;
@@ -876,7 +900,12 @@ createApp({
             return String(procedure?.sourceFile || "").startsWith("inceptor://");
         },
         isUnparsedProcedure(procedure) {
+            if (procedure?.parsed === false) return true;
+            if (procedure?.parsed === true) return false;
             return this.isDatabaseProcedureItem(procedure) && String(procedure?.description || "").startsWith("尚未解析");
+        },
+        isInferredTable(table) {
+            return String(table?.sourceFile || "").startsWith("inceptor://");
         },
         tableActive(table) {
             return this.selectedTable?.table?.id === table.id;
@@ -1821,15 +1850,70 @@ createApp({
             this.tableDetailCache = {};
             this.procedureDetailCache = {};
         },
-        async getList(kind, cacheKey) {
+        async getList(kind, cacheKey, force = false) {
             const cache = kind === "tables" ? this.tableListCache : this.procedureListCache;
-            if (Object.prototype.hasOwnProperty.call(cache, cacheKey)) {
+            if (!force && Object.prototype.hasOwnProperty.call(cache, cacheKey)) {
                 return cache[cacheKey];
             }
 
             const items = await this.getJson(`/api/${kind}?${cacheKey}`);
             cache[cacheKey] = items;
             return items;
+        },
+        /** True when the procedure list is a live query against the database catalogue. */
+        databaseProcedureSearch() {
+            return this.catalogStatus?.enabled === true;
+        },
+        tableSearchKey() {
+            const params = new URLSearchParams();
+            if (this.query.trim()) params.set("q", this.query.trim());
+            if (this.schema) params.set("schema", this.schema);
+            if (this.relation) params.set("relation", this.relation);
+            if (this.tableType) params.set("tableType", this.tableType);
+            if (this.tableStatus) params.set("tableStatus", this.tableStatus);
+            return params.toString();
+        },
+        /**
+         * Query string of the 存储过程 tab. With the database source enabled it is a fuzzy search
+         * against system.procedures_v (keyword/database), so a name that is not in the locally indexed
+         * page is still found; otherwise it keeps the file based q/schema search.
+         */
+        procedureSearchKey() {
+            const params = new URLSearchParams();
+            if (this.query.trim()) params.set(this.databaseProcedureSearch() ? "keyword" : "q", this.query.trim());
+            if (this.schema) params.set(this.databaseProcedureSearch() ? "database" : "schema", this.schema);
+            return params.toString();
+        },
+        async fetchProcedureList(cacheKey, force = false) {
+            if (!force && Object.prototype.hasOwnProperty.call(this.procedureListCache, cacheKey)) {
+                return this.procedureListCache[cacheKey];
+            }
+            const url = this.databaseProcedureSearch()
+                ? `/api/catalog/procedure-list?${cacheKey}`
+                : `/api/procedures?${cacheKey}`;
+            const items = await this.getJson(url);
+            this.procedureListCache[cacheKey] = items;
+            return items;
+        },
+        /**
+         * Reloads the list of the active tab without touching the current selection.
+         *
+         * <p>Needed because database procedures are parsed on demand: after a procedure is read, or
+         * after a catalogue refresh / batch index, the cards in the left list (parameters, referenced
+         * tables, inferred tables) change on the server.
+         */
+        async refreshVisibleList() {
+            this.tableListCache = {};
+            this.procedureListCache = {};
+            try {
+                if (this.activeTab === "tables") {
+                    this.tables = await this.getList("tables", this.tableSearchKey(), true);
+                } else if (this.activeTab === "procedures") {
+                    this.procedures = await this.fetchProcedureList(this.procedureSearchKey(), true);
+                }
+            } catch (error) {
+                // Keep whatever is on screen; the next search will retry.
+            }
         },
         async getDetail(kind, id) {
             const cache = kind === "tables" ? this.tableDetailCache : this.procedureDetailCache;
@@ -2202,7 +2286,7 @@ createApp({
                     </div>
                     <select v-if="activeTab !== 'catalog'" v-model="schema" @change="search">
                         <option value="">全部 schema</option>
-                        <option v-for="item in schemas" :key="item" :value="item">{{ item }}</option>
+                        <option v-for="item in schemaOptions" :key="item" :value="item">{{ item }}</option>
                     </select>
                     <input v-if="activeTab === 'catalog'" v-model="catalogDatabase" @keyup.enter="search" placeholder="database（可选，如 ads）">
                     <input v-if="activeTab === 'catalog'" v-model="catalogOwner" @keyup.enter="search" placeholder="owner（可选，如 hive）">
@@ -2235,6 +2319,7 @@ createApp({
                 <div class="list-toolbar">
                     <div>
                         <strong>{{ filterSummary }}</strong>
+                        <span v-if="activeTab === 'procedures' && databaseProcedureSearch()" class="list-toolbar-note">数据库实时模糊查询，最多 {{ catalogStatus.maxRows }} 条</span>
                         <span v-if="showFavoritesOnly" class="list-toolbar-note">已收藏</span>
                     </div>
                     <div class="list-toolbar-actions">
@@ -2301,6 +2386,7 @@ createApp({
                                         <span class="badge">{{ table.schema }}</span>
                                         <span>{{ table.name }}</span>
                                         <span v-if="isFavorite(table)" class="favorite-indicator" title="已收藏" aria-label="已收藏">★</span>
+                                        <span v-if="isInferredTable(table)" class="status-badge" title="该表由数据库存储过程推断，暂无字段信息">库内推断</span>
                                         <span v-if="table.orphan" class="status-badge danger">孤表</span>
                                         <span v-if="isAdjusted('TABLE', table)" class="status-badge adjustment">调整</span>
                                     </div>

@@ -136,4 +136,15 @@ class InceptorCatalogIndexTest {
         assertTrue(Files.isRegularFile(index.indexFile()));
         assertTrue(index.indexFile().toString().endsWith("index.json"));
     }
+
+    @Test
+    void statsListTheDatabasesOfTheCatalogueForTheFilterDropdown() {
+        InceptorCatalogIndex index = newIndex("databases.json");
+        index.replaceCatalogue(List.of(
+                summary("ads", "p_one"),
+                summary("crsql", "p_two"),
+                summary("ads", "p_three")));
+
+        assertEquals(List.of("ADS", "CRSQL"), index.stats().databases());
+    }
 }

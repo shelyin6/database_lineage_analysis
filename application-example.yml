@@ -56,6 +56,7 @@ metadata:
     cache-ttl-seconds: 1800
     cache-verify-version: true
     # 单次查询返回行数 / 单次批量分析过程数上限
+    # max-rows 同时是“存储过程”页签数据库实时查询的默认返回条数
     max-rows: 200
     max-analyze-procedures: 20
     # 启动后在后台刷新一次过程目录（只查过程名，不读 full_text），

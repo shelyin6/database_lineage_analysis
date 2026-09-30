@@ -67,6 +67,24 @@ public class ProcedureCatalogController {
     }
 
     /**
+     * Procedure list used by the 存储过程 tab when the database source is enabled: the same fuzzy
+     * keyword / database / owner conditions as {@link #search}, but merged with the local index so
+     * already parsed procedures show their target/source table counts and the rest are marked as
+     * "尚未解析". Unlike the file based list this query always runs against the database, so it is not
+     * limited to the procedures that happen to be indexed locally.
+     */
+    @GetMapping("/procedure-list")
+    public java.util.List<CatalogProcedureItem> procedureList(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String database,
+            @RequestParam(required = false) String owner,
+            @RequestParam(defaultValue = "false") boolean exact,
+            @RequestParam(required = false) Integer limit
+    ) {
+        return service.searchForView(keyword, database, owner, exact, limit);
+    }
+
+    /**
      * Bounded batch analysis driven by a search condition, for example {@code {"database":"ads"}} or
      * {@code {"keyword":"p_loan"}}. A blank condition walks the whole catalogue, limited by
      * {@code metadata.inceptor.max-analyze-procedures}.

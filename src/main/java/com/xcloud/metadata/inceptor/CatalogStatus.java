@@ -79,7 +79,8 @@ public record CatalogStatus(
             String catalogueLoadedAt,
             String parsedUpdatedAt,
             String indexFile,
-            String lastError
+            String lastError,
+            java.util.List<String> databases
     ) {
         static Index of(InceptorCatalogIndex.Stats stats, String indexFile) {
             return new Index(
@@ -89,7 +90,8 @@ public record CatalogStatus(
                     stats.catalogueLoadedAt() == null ? "" : stats.catalogueLoadedAt().toString(),
                     stats.parsedUpdatedAt() == null ? "" : stats.parsedUpdatedAt().toString(),
                     indexFile,
-                    stats.lastError() == null ? "" : stats.lastError());
+                    stats.lastError() == null ? "" : stats.lastError(),
+                    stats.databases() == null ? java.util.List.of() : stats.databases());
         }
     }
 }

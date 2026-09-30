@@ -111,19 +111,20 @@ public class ProcedureCatalogService {
             Integer limit
     ) {
         requireEnabled();
-        int cap = effectiveCatalogueLimit(limit);
+        int cap = catalogueCeiling();
+        int requested = limit == null || limit <= 0 ? cap : Math.min(limit, cap);
         long startedAt = System.nanoTime();
         try {
             List<CatalogProcedureSummary> rows = queryExecutor.execute(
                     "刷新存储过程目录",
                     requestTimeoutMillis(),
-                    () -> repository.search(keyword, database, owner, exact, cap).stream()
+                    () -> repository.search(keyword, database, owner, exact, requested, cap).stream()
                             .map(CatalogProcedureSummary::of)
                             .toList());
             catalogIndex.replaceCatalogue(rows);
             reloadSnapshot();
             LOG.info("存储过程目录已刷新：{} 条（keyword={}, database={}, owner={}, 上限={}），耗时 {}ms",
-                    rows.size(), keyword, database, owner, cap, (System.nanoTime() - startedAt) / 1_000_000L);
+                    rows.size(), keyword, database, owner, requested, (System.nanoTime() - startedAt) / 1_000_000L);
         } catch (RuntimeException exception) {
             catalogIndex.setLastError(exception.getMessage());
             throw exception;
@@ -149,8 +150,34 @@ public class ProcedureCatalogService {
         List<InceptorProcedureRow> rows = queryExecutor.execute(
                 "查询存储过程列表",
                 requestTimeoutMillis(),
-                () -> repository.search(keyword, databaseName, ownerName, exact, limit));
+                () -> repository.search(keyword, databaseName, ownerName, exact, limit, catalogueCeiling()));
         return rows.stream().map(CatalogProcedureSummary::of).toList();
+    }
+
+    /**
+     * Procedure list for the 存储过程 tab when the database source is enabled.
+     *
+     * <p>This is the fix for "search only looks at whatever was loaded": the query runs against
+     * {@code system.procedures_v} with the same fuzzy/exact/database/owner conditions as
+     * {@code /api/catalog/procedures}, so it is not limited to the locally indexed page. Each hit is
+     * merged with the local index, so already parsed procedures report their real numbers while the
+     * rest come back as "尚未解析" rows.
+     */
+    public List<CatalogProcedureItem> searchForView(
+            String keyword,
+            String databaseName,
+            String ownerName,
+            boolean exact,
+            Integer limit
+    ) {
+        requireEnabled();
+        List<InceptorProcedureRow> rows = queryExecutor.execute(
+                "查询存储过程列表",
+                requestTimeoutMillis(),
+                () -> repository.search(keyword, databaseName, ownerName, exact, limit, catalogueCeiling()));
+        return rows.stream()
+                .map(row -> CatalogProcedureItem.of(row, catalogIndex.parsed(row.qualifiedName()).orElse(null)))
+                .toList();
     }
 
     /**
@@ -226,7 +253,8 @@ public class ProcedureCatalogService {
                         request == null ? null : request.database(),
                         request == null ? null : request.owner(),
                         request != null && request.exact(),
-                        searchLimit));
+                        searchLimit,
+                        catalogueCeiling()));
         if (matched.isEmpty()) {
             throw new ProcedureNotFoundException("未找到匹配的存储过程，请调整名称、数据库或拥有者条件");
         }
@@ -333,14 +361,10 @@ public class ProcedureCatalogService {
      * Catalogue refresh bound: {@code catalogue-max-entries} when set, otherwise the normal row
      * limit. A name-only query is cheap, so the whole catalogue can be loaded in one go.
      */
-    private int effectiveCatalogueLimit(Integer requestedLimit) {
-        int max = properties.getCatalogueMaxEntries() > 0
+    private int catalogueCeiling() {
+        return properties.getCatalogueMaxEntries() > 0
                 ? properties.getCatalogueMaxEntries()
                 : Math.max(1, properties.getMaxRows());
-        if (requestedLimit == null || requestedLimit <= 0) {
-            return max;
-        }
-        return Math.min(requestedLimit, max);
     }
 
     /** Rebuilds the snapshot so the new index entries show up in the UI (file parsing is cheap). */
