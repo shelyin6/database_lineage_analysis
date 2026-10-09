@@ -496,7 +496,7 @@ button.metric:hover:not(:disabled) {
 
 .tabs {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: 1fr 1fr;
     gap: 6px;
     padding: 10px;
     border-bottom: 1px solid var(--line);
@@ -2970,12 +2970,15 @@ pre.source-code {
 
 .catalog-actions {
     display: flex;
-    gap: 8px;
+    flex-wrap: wrap;
+    gap: 6px;
     margin-top: 6px;
 }
 
 .catalog-actions button {
-    padding: 4px 10px;
+    flex: 0 1 auto;
+    white-space: nowrap;
+    padding: 4px 8px;
     font-size: 12px;
 }
 

@@ -32,19 +32,18 @@ createApp({
             tableDetailCache: {},
             procedureDetailCache: {},
             catalogStatus: null,
-            catalogDatabase: "",
             catalogOwner: "",
             catalogExact: false,
-            catalogProcedures: [],
-            catalogSelected: null,
             catalogProfile: null,
             catalogBatch: null,
-            catalogLoading: false,
             catalogError: "",
-            catalogElapsedMs: 0,
             catalogClearing: false,
             catalogRefreshing: false,
             detailLoading: false,
+            lastSelectedTableId: "",
+            lastSelectedProcedureId: "",
+            lastTableState: null,
+            lastProcedureState: null,
             tableCommentDraft: "",
             codeValueDrafts: {},
             annotationEditing: false,
@@ -109,7 +108,6 @@ createApp({
         activeItems() {
             if (this.activeTab === "tables") return this.tables;
             if (this.activeTab === "procedures") return this.procedures;
-            if (this.activeTab === "catalog") return this.catalogProcedures;
             return this.overviewTables;
         },
         visibleItems() {
@@ -324,7 +322,7 @@ createApp({
             if (this.activeTab === "tables" && this.selectedTable) {
                 return this.selectedTable.table.qualifiedName;
             }
-            if ((this.activeTab === "procedures" || this.activeTab === "catalog") && this.selectedProcedure) {
+            if (this.activeTab === "procedures" && this.selectedProcedure) {
                 return this.selectedProcedure.qualifiedName;
             }
             return "请选择左侧对象";
@@ -415,6 +413,7 @@ createApp({
             await this.search({ history: "replace", objectId: route.objectId, focusLine: route.focusLine });
         },
         async openOverview() {
+            this.rememberTabState();
             if (this.activeTab === "overview") {
                 this.activeTab = "tables";
                 this.overviewQuery = "";
@@ -546,6 +545,7 @@ createApp({
             this.search();
         },
         async openMetric(metric) {
+            this.rememberTabState();
             this.query = "";
             this.schema = "";
             this.tableType = "";
@@ -653,6 +653,12 @@ createApp({
             this.overviewTables = [];
             this.selectedTable = null;
             this.selectedProcedure = null;
+            this.lastSelectedTableId = "";
+            this.lastSelectedProcedureId = "";
+            this.lastTableState = null;
+            this.lastProcedureState = null;
+            this.catalogProfile = null;
+            this.catalogBatch = null;
             this.loginLogsModal = false;
             this.loginLogs = [];
             this.customGroupThemes = [];
@@ -686,11 +692,9 @@ createApp({
             const objectId = options.objectId || "";
             const focusLine = Number(options.focusLine || 0);
             const focusColumn = options.focusColumn || "";
-            if (this.activeTab === "catalog") {
-                await this.searchCatalog();
-                this.syncHistory(historyMode);
-                return;
-            }
+            // "restore" (tab switch) falls back to the first row, a deep link does not: selecting an
+            // unrelated object would be more confusing than showing "nothing found".
+            const fallbackToFirst = options.fallbackToFirst === true;
             this.loading = true;
             this.error = "";
             try {
@@ -705,7 +709,8 @@ createApp({
                 this.tables = await this.getList("tables", cacheKey);
                     if (this.tables.length > 0) {
                         const selectable = this.showFavoritesOnly ? this.tables.filter(item => this.isFavorite(item)) : this.tables;
-                        const selected = this.findListItem(selectable, objectId) || (objectId ? null : selectable[0]);
+                        const selected = this.findListItem(selectable, objectId)
+                            || (objectId && !fallbackToFirst ? null : selectable[0]);
                         if (!selected) {
                             this.selectedTable = null;
                         } else {
@@ -739,17 +744,60 @@ createApp({
                 this.loading = false;
             }
         },
+        /** Remembers the filters of a tab, so switching back does not lose keyword/library filters. */
+        rememberTabState(tab = this.activeTab) {
+            if (tab === "tables") {
+                this.lastTableState = {
+                    query: this.query,
+                    schema: this.schema,
+                    relation: this.relation,
+                    tableType: this.tableType,
+                    tableStatus: this.tableStatus
+                };
+            } else if (tab === "procedures") {
+                this.lastProcedureState = {
+                    query: this.query,
+                    schema: this.schema
+                };
+            }
+        },
+        restoreTabState(tab) {
+            const state = tab === "tables" ? this.lastTableState : tab === "procedures" ? this.lastProcedureState : null;
+            if (!state) return;
+            this.query = state.query || "";
+            this.schema = state.schema || "";
+            if (tab === "tables") {
+                this.relation = state.relation || "";
+                this.tableType = state.tableType || "";
+                this.tableStatus = state.tableStatus || "";
+            }
+        },
         async switchTab(tab) {
+            if (this.activeTab !== tab) {
+                this.rememberTabState(this.activeTab);
+            }
             this.activeTab = tab;
-            this.selectedTable = null;
-            this.selectedProcedure = null;
             this.columnQuery = "";
-            await this.search({ history: "push" });
+            if (tab === "tables") {
+                this.selectedProcedure = null;
+                this.restoreTabState("tables");
+            } else if (tab === "procedures") {
+                this.selectedTable = null;
+                this.restoreTabState("procedures");
+            }
+            // Re-open the object that was selected in this tab last time instead of jumping back to
+            // the first row (for example after following a dependency table and coming back).
+            const restoreId = tab === "tables"
+                ? this.lastSelectedTableId
+                : tab === "procedures" ? this.lastSelectedProcedureId : "";
+            await this.search({ history: "push", objectId: restoreId, fallbackToFirst: true });
         },
         async selectTable(table, options = {}) {
             this.selectedProcedure = null;
+            this.catalogProfile = null;
             this.procedureFocusLine = 0;
             this.selectedTable = await this.getDetail("tables", table.id);
+            this.lastSelectedTableId = this.selectedTable?.table?.id || table.id;
             this.tableDetailTab = options.focusColumn ? "columns" : "basic";
             this.columnQuery = options.focusColumn || "";
             this.prepareTableEditors();
@@ -761,15 +809,28 @@ createApp({
             const wasUnparsed = this.isUnparsedProcedure(procedure);
             this.detailLoading = true;
             try {
-                this.selectedProcedure = await this.getDetail("procedures", procedure.id);
+                if (this.isDatabaseProcedureItem(procedure)) {
+                    // Database procedures are read through the catalogue endpoint: it returns the parsed
+                    // analysis together with the "读取方式（缓存命中/耗时）" details, and it indexes the
+                    // result so the table and lineage views pick it up.
+                    const database = encodeURIComponent(procedure.schema || "");
+                    const name = encodeURIComponent(procedure.name || "");
+                    this.catalogProfile = await this.getJson(`/api/catalog/procedures/${database}/${name}/profile`);
+                    this.selectedProcedure = this.catalogProfile.analysis;
+                } else {
+                    this.catalogProfile = null;
+                    this.selectedProcedure = await this.getDetail("procedures", procedure.id);
+                }
             } finally {
                 this.detailLoading = false;
             }
+            this.lastSelectedProcedureId = this.selectedProcedure?.id || procedure.id;
             if (wasUnparsed) {
                 // Reading a database procedure fills in its parameters / referenced tables, and can add
                 // new (inferred) tables. Refresh the visible lists so the left cards show the numbers
                 // right away instead of only after a restart.
                 await this.refreshVisibleList();
+                await this.loadCatalogStatus();
             }
             if (this.procedureFocusLine > 0) {
                 this.$nextTick(() => this.scrollToProcedureLine(this.procedureFocusLine));
@@ -783,7 +844,7 @@ createApp({
             try {
                 const params = new URLSearchParams();
                 if (this.query.trim()) params.set("keyword", this.query.trim());
-                if (this.catalogDatabase.trim()) params.set("database", this.catalogDatabase.trim());
+                if (this.schema) params.set("database", this.schema);
                 if (this.catalogOwner.trim()) params.set("owner", this.catalogOwner.trim());
                 if (this.catalogExact) params.set("exact", "true");
                 this.catalogStatus = await this.getJson(`/api/catalog/refresh?${params.toString()}`, { method: "POST" });
@@ -804,71 +865,17 @@ createApp({
                 this.catalogError = error.message;
             }
         },
-        async searchCatalog() {
-            this.loading = true;
-            this.catalogLoading = true;
-            this.catalogError = "";
-            this.selectedProcedure = null;
-            this.catalogSelected = null;
-            this.catalogProfile = null;
-            const startedAt = performance.now();
-            try {
-                const params = new URLSearchParams();
-                const keyword = this.query.trim();
-                if (keyword) params.set("keyword", keyword);
-                if (this.catalogDatabase.trim()) params.set("database", this.catalogDatabase.trim());
-                if (this.catalogOwner.trim()) params.set("owner", this.catalogOwner.trim());
-                if (this.catalogExact) params.set("exact", "true");
-                this.catalogProcedures = await this.getJson(`/api/catalog/procedures?${params.toString()}`);
-                this.catalogElapsedMs = Math.round(performance.now() - startedAt);
-                if (this.catalogProcedures.length > 0) {
-                    await this.selectCatalogProcedure(this.catalogProcedures[0], { history: "none" });
-                }
-            } catch (error) {
-                this.catalogProcedures = [];
-                this.catalogError = error.message;
-            } finally {
-                this.catalogLoading = false;
-                this.loading = false;
-                await this.loadCatalogStatus();
-            }
-        },
-        async selectCatalogProcedure(item, options = {}) {
-            this.selectedTable = null;
-            this.catalogSelected = item;
-            this.catalogLoading = true;
-            this.catalogError = "";
-            try {
-                const database = encodeURIComponent(item.databaseName || "");
-                const name = encodeURIComponent(item.procedureName || "");
-                this.catalogProfile = await this.getJson(`/api/catalog/procedures/${database}/${name}/profile`);
-                this.selectedProcedure = this.catalogProfile.analysis;
-                this.catalogElapsedMs = this.catalogProfile.elapsedMillis;
-            } catch (error) {
-                this.selectedProcedure = null;
-                this.catalogProfile = null;
-                this.catalogError = error.message;
-            } finally {
-                this.catalogLoading = false;
-                this.syncHistory(options.history === "none" ? "none" : "push");
-                await this.loadCatalogStatus();
-            }
-            // Opening a procedure from the database tab indexes it, so the lists of the other tabs are
-            // stale from this point on.
-            this.clearCaches();
-        },
         async analyzeCatalogBatch() {
             this.loading = true;
             this.catalogError = "";
             try {
                 const params = new URLSearchParams();
                 if (this.query.trim()) params.set("keyword", this.query.trim());
-                if (this.catalogDatabase.trim()) params.set("database", this.catalogDatabase.trim());
+                if (this.schema) params.set("database", this.schema);
                 if (this.catalogOwner.trim()) params.set("owner", this.catalogOwner.trim());
                 if (this.catalogExact) params.set("exact", "true");
                 this.catalogBatch = await this.getJson(`/api/catalog/analyze?${params.toString()}`, { method: "POST" });
                 this.selectedProcedure = null;
-                this.catalogSelected = null;
                 this.catalogProfile = null;
                 this.showSuccess(`已解析并索引 ${this.catalogBatch.analyzed} 个过程，结果已并入“存储过程/表”页签`);
                 this.clearCaches();
@@ -891,10 +898,6 @@ createApp({
             } finally {
                 this.catalogClearing = false;
             }
-        },
-        catalogActive(item) {
-            return this.catalogSelected?.databaseName === item.databaseName
-                && this.catalogSelected?.procedureName === item.procedureName;
         },
         isDatabaseProcedureItem(procedure) {
             return String(procedure?.sourceFile || "").startsWith("inceptor://");
@@ -1691,6 +1694,7 @@ createApp({
             element.scrollIntoView({ behavior: "smooth", block: "center" });
         },
         async jumpTable(name, options = {}) {
+            this.rememberTabState();
             this.activeTab = "tables";
             this.selectedProcedure = null;
             if (options.clearFilters) {
@@ -1711,6 +1715,7 @@ createApp({
             await this.search({ history: "push" });
         },
         async jumpProcedure(name, options = {}) {
+            this.rememberTabState();
             this.activeTab = "procedures";
             this.selectedTable = null;
             if (options.clearFilters) {
@@ -1723,7 +1728,11 @@ createApp({
                 await this.search({ history: "push", objectId: name, focusLine: options.line });
                 return;
             }
-            this.query = name;
+            // 数据库模式下关键字匹配的是 procedure_name（不带库名），所以 "ads.p_x" 这种引用要
+            // 只取最后一段再查，否则模糊查询匹配不到。
+            this.query = this.databaseProcedureSearch() && name.includes(".")
+                ? name.slice(name.lastIndexOf(".") + 1)
+                : name;
             await this.search({ history: "push" });
         },
         async handlePopState() {
@@ -1744,7 +1753,11 @@ createApp({
         },
         readRoute() {
             const params = new URLSearchParams(window.location.search);
-            const tab = params.get("tab");
+            let tab = params.get("tab");
+            if (tab === "catalog") {
+                // 兼容旧书签：数据库页签已经合并进“存储过程”页签。
+                tab = "procedures";
+            }
             return {
                 activeTab: ["procedures", "overview"].includes(tab) ? tab : "tables",
                 query: params.get("q") || "",
@@ -2269,9 +2282,8 @@ createApp({
                 <div class="tabs">
                     <button class="tab" :class="{active: activeTab === 'tables'}" @click="switchTab('tables')">表</button>
                     <button class="tab" :class="{active: activeTab === 'procedures'}" @click="switchTab('procedures')">存储过程</button>
-                    <button class="tab" :class="{active: activeTab === 'catalog'}" @click="switchTab('catalog')">数据库</button>
                 </div>
-                <div class="grouping-mode-switch" v-if="activeTab !== 'catalog'" aria-label="分组模式">
+                <div class="grouping-mode-switch" aria-label="分组模式">
                     <span>分组模式</span>
                     <button type="button" :class="{active: groupingMode === 'system'}" @click="setGroupingMode('system')">系统分组</button>
                     <button type="button" :class="{active: groupingMode === 'custom'}" @click="setGroupingMode('custom')">自定义分组</button>
@@ -2281,25 +2293,18 @@ createApp({
                 </div>
                 <div class="filters">
                     <div class="search-input wide">
-                        <input ref="searchInput" v-model="query" @keyup.enter="search" :placeholder="activeTab === 'catalog' ? '输入存储过程名（支持模糊匹配，留空列出前若干条）' : '搜索名称、注释、字段、引用表'">
+                        <input ref="searchInput" v-model="query" @keyup.enter="search" :placeholder="activeTab === 'procedures' && databaseProcedureSearch() ? '输入存储过程名（支持模糊匹配，留空列出前若干条）' : '搜索名称、注释、字段、引用表'">
                         <button v-if="query" class="clear-input" type="button" title="清空搜索" aria-label="清空搜索" @click="query = ''; search()">×</button>
                     </div>
-                    <select v-if="activeTab !== 'catalog'" v-model="schema" @change="search">
-                        <option value="">全部 schema</option>
+                    <select v-model="schema" @change="search">
+                        <option value="">{{ activeTab === 'procedures' && databaseProcedureSearch() ? '全部 database' : '全部 schema' }}</option>
                         <option v-for="item in schemaOptions" :key="item" :value="item">{{ item }}</option>
                     </select>
-                    <input v-if="activeTab === 'catalog'" v-model="catalogDatabase" @keyup.enter="search" placeholder="database（可选，如 ads）">
-                    <input v-if="activeTab === 'catalog'" v-model="catalogOwner" @keyup.enter="search" placeholder="owner（可选，如 hive）">
-                    <label v-if="activeTab === 'catalog'" class="favorite-filter" :class="{active: catalogExact}">
+                    <input v-if="activeTab === 'procedures' && databaseProcedureSearch()" v-model="catalogOwner" @keyup.enter="search" placeholder="owner（可选，如 hive）">
+                    <label v-if="activeTab === 'procedures' && databaseProcedureSearch()" class="favorite-filter" :class="{active: catalogExact}">
                         <input type="checkbox" v-model="catalogExact" @change="search">
                         精确匹配
                     </label>
-                    <button v-if="activeTab === 'catalog'" type="button" class="text-button" :disabled="loading || catalogRefreshing" @click="refreshCatalogIndex">
-                        {{ catalogRefreshing ? "刷新中…" : "刷新过程目录" }}
-                    </button>
-                    <button v-if="activeTab === 'catalog'" type="button" class="text-button" :disabled="loading" @click="analyzeCatalogBatch">
-                        解析并索引匹配过程
-                    </button>
                     <select v-if="activeTab === 'tables'" v-model="relation" @change="search">
                         <option value="">全部关联状态</option>
                         <option value="orphan">仅孤表</option>
@@ -2308,7 +2313,7 @@ createApp({
                     <select v-if="activeTab === 'tables'" v-model="tableType" @change="search"><option value="">全部表类型</option><option>基表</option><option>配置表</option><option>回流表</option><option>系统表</option><option>拉链表</option></select>
                     <select v-if="activeTab === 'tables'" v-model="tableStatus" @change="search"><option value="">全部表状态</option><option>有效</option><option>下线</option><option>待清理</option></select>
                     <div class="filter-actions wide">
-                        <label v-if="activeTab !== 'catalog'" class="favorite-filter" :class="{active: showFavoritesOnly}">
+                        <label class="favorite-filter" :class="{active: showFavoritesOnly}">
                             <input type="checkbox" v-model="showFavoritesOnly" @change="search">
                             <span aria-hidden="true">★</span>
                             仅看收藏
@@ -2328,46 +2333,6 @@ createApp({
                     </div>
                 </div>
                 <div class="object-list">
-                    <template v-if="activeTab === 'catalog'">
-                        <div class="catalog-status">
-                            <div v-if="!catalogStatus">正在读取数据库接入状态…</div>
-                            <template v-else>
-                                <div>接入：<strong>{{ catalogStatus.enabled ? "已启用" : "未启用" }}</strong> · 表 {{ catalogStatus.procedureTable }}</div>
-                                <div>连接：{{ catalogStatus.endpoint }}</div>
-                                <div>驱动：{{ catalogStatus.driverAvailable ? catalogStatus.driverDescription : "未加载（" + catalogStatus.driverDirectory + "）" }}</div>
-                                <div>连接池：复用 {{ catalogStatus.pool.reusePercent }}%（复用 {{ catalogStatus.pool.reused }} / 借用 {{ catalogStatus.pool.borrowed }}，创建 {{ catalogStatus.pool.created }}，上限 {{ catalogStatus.pool.maxSize }}）</div>
-                                <div>源码缓存：命中 {{ catalogStatus.cache.hitPercent }}%（命中 {{ catalogStatus.cache.hits }} / 未命中 {{ catalogStatus.cache.misses }}，条目 {{ catalogStatus.cache.entries }}）</div>
-                                <div>过程目录（“存储过程”页签）：{{ catalogStatus.index.catalogueSize }} 条，已解析 {{ catalogStatus.index.parsedSize }}，待解析 {{ catalogStatus.index.pendingSize }}</div>
-                                <div v-if="catalogStatus.index.catalogueLoadedAt">目录刷新时间 {{ formatDateTime(catalogStatus.index.catalogueLoadedAt) }}</div>
-                                <div v-else class="muted">过程目录尚未刷新，启动后会自动刷新一次</div>
-                                <div v-if="catalogStatus.index.lastError" class="catalog-error">{{ catalogStatus.index.lastError }}</div>
-                                <div>本次列表耗时 {{ catalogElapsedMs }} ms · 单次请求上限 {{ catalogStatus.requestTimeoutSeconds }} 秒</div>
-                                <div class="catalog-actions">
-                                    <button type="button" @click="loadCatalogStatus">刷新统计</button>
-                                    <button type="button" :disabled="catalogClearing" @click="clearCatalogCache">
-                                        {{ catalogClearing ? "清空中…" : "清空缓存" }}
-                                    </button>
-                                </div>
-                            </template>
-                        </div>
-                        <div v-if="catalogError" class="catalog-error">{{ catalogError }}</div>
-                        <button
-                            v-for="item in catalogProcedures"
-                            :key="item.qualifiedName"
-                            class="object-item"
-                            :class="{active: catalogActive(item)}"
-                            @click="selectCatalogProcedure(item)">
-                            <div class="object-name">
-                                <span class="badge">{{ item.databaseName }}</span>
-                                <span>{{ item.procedureName }}</span>
-                            </div>
-                            <div class="object-comment">{{ item.parameters || "无参数信息" }}</div>
-                            <div class="object-meta">owner {{ item.ownerName }} · {{ item.createTime || "无创建时间" }}</div>
-                        </button>
-                        <div v-if="catalogLoading" class="catalog-progress">正在读取…</div>
-                        <div v-if="!catalogLoading && catalogProcedures.length === 0" class="empty">没有匹配结果</div>
-                    </template>
-
                     <template v-if="activeTab === 'tables'">
                         <section v-for="group in tableGroups" :key="group.key" class="object-group">
                             <button class="object-group-title" :aria-expanded="!isGroupCollapsed(group)" @click="toggleGroup(group)">
@@ -2400,6 +2365,31 @@ createApp({
                     </template>
 
                     <template v-if="activeTab === 'procedures'">
+                        <div class="catalog-status" v-if="catalogStatus && catalogStatus.enabled">
+                            <div>接入：<strong>已启用</strong> · 表 {{ catalogStatus.procedureTable }}</div>
+                            <div>连接：{{ catalogStatus.endpoint }}</div>
+                            <div>驱动：{{ catalogStatus.driverAvailable ? catalogStatus.driverDescription : "未加载（" + catalogStatus.driverDirectory + "）" }}</div>
+                            <div>连接池：复用 {{ catalogStatus.pool.reusePercent }}%（复用 {{ catalogStatus.pool.reused }} / 借用 {{ catalogStatus.pool.borrowed }}，创建 {{ catalogStatus.pool.created }}）</div>
+                            <div>源码缓存：命中 {{ catalogStatus.cache.hitPercent }}%（命中 {{ catalogStatus.cache.hits }} / 未命中 {{ catalogStatus.cache.misses }}，条目 {{ catalogStatus.cache.entries }}）</div>
+                            <div>过程目录：{{ catalogStatus.index.catalogueSize }} 条，已解析 {{ catalogStatus.index.parsedSize }}，待解析 {{ catalogStatus.index.pendingSize }}</div>
+                            <div v-if="catalogStatus.index.catalogueLoadedAt">目录刷新时间 {{ formatDateTime(catalogStatus.index.catalogueLoadedAt) }}</div>
+                            <div v-else class="muted">过程目录尚未刷新，启动后会自动刷新一次</div>
+                            <div v-if="catalogStatus.index.lastError" class="catalog-error">{{ catalogStatus.index.lastError }}</div>
+                            <div class="catalog-actions">
+                                <button type="button" @click="loadCatalogStatus">刷新统计</button>
+                                <button type="button" :disabled="loading || catalogRefreshing" @click="refreshCatalogIndex">
+                                    {{ catalogRefreshing ? "刷新中…" : "刷新过程目录" }}
+                                </button>
+                                <button type="button" :disabled="loading" @click="analyzeCatalogBatch">解析并索引匹配过程</button>
+                                <button type="button" :disabled="catalogClearing" @click="clearCatalogCache">
+                                    {{ catalogClearing ? "清空中…" : "清空源码缓存" }}
+                                </button>
+                            </div>
+                        </div>
+                        <div class="catalog-status muted" v-else-if="catalogStatus">
+                            <div>数据库接入未启用（metadata.inceptor.enabled=false）：当前只显示本地 SQL 文件解析结果。</div>
+                        </div>
+                        <div v-if="catalogError" class="catalog-error">{{ catalogError }}</div>
                         <section v-for="group in procedureGroups" :key="group.key" class="object-group">
                             <button class="object-group-title" :aria-expanded="!isGroupCollapsed(group)" @click="toggleGroup(group)">
                                 <span class="object-group-marker" aria-hidden="true"></span>
@@ -2430,7 +2420,7 @@ createApp({
                         </section>
                     </template>
 
-                    <div v-if="activeTab !== 'catalog' && visibleItems.length === 0" class="empty">没有匹配结果</div>
+                    <div v-if="visibleItems.length === 0" class="empty">没有匹配结果</div>
                 </div>
             </aside>
 
@@ -2687,7 +2677,7 @@ createApp({
                     <div v-if="!selectedTable && !selectedProcedure" class="empty">从左侧选择表或存储过程查看详情</div>
                     <div v-if="detailLoading && !selectedProcedure" class="empty">正在读取过程源码并解析（首次约 4~5 秒，之后走缓存）…</div>
 
-                    <section class="section" v-if="activeTab === 'catalog' && catalogProfile">
+                    <section class="section" v-if="selectedProcedure && catalogProfile">
                         <div class="section-title"><h3>数据库来源</h3></div>
                         <div class="kv">
                             <div class="key">对象</div><div class="value mono">{{ catalogProfile.qualifiedName }}</div>
@@ -2705,7 +2695,7 @@ createApp({
                         </div>
                     </section>
 
-                    <section class="section" v-if="activeTab === 'catalog' && catalogBatch">
+                    <section class="section" v-if="activeTab === 'procedures' && catalogBatch && !selectedProcedure">
                         <div class="section-title"><h3>批量分析结果</h3></div>
                         <div class="kv">
                             <div class="key">匹配 / 分析</div>
