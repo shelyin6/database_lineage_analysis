@@ -40,6 +40,7 @@ createApp({
             catalogError: "",
             catalogClearing: false,
             catalogRefreshing: false,
+            catalogPanelOpen: false,
             detailLoading: false,
             lastSelectedTableId: "",
             lastSelectedProcedureId: "",
@@ -130,13 +131,21 @@ createApp({
         },
         /** Hint above the procedure list: single-query cap and whether the result was cut short. */
         procedureListNote() {
-            if (!(this.activeTab === "procedures" && this.databaseProcedureSearch())) return "";
+            if (!(this.activeTab === "procedures" && this.databaseProcedureSearch())) return null;
             const limit = this.procedurePageSize > 0 ? this.procedurePageSize : (this.catalogStatus?.maxRows || 200);
-            if (this.procedures.length === 0) return "";
+            if (this.procedures.length === 0) return null;
             if (this.procedures.length >= limit) {
-                return `已显示前 ${limit} 条，可能还有更多（加关键字、调大“显示条数”或 metadata.inceptor.max-rows）`;
+                return {
+                    text: `已显示前 ${limit} 条`,
+                    title: `返回条数正好等于上限 ${limit}，结果可能被截断：可输入更精确的关键字、调大“显示条数”，`
+                        + "或调大 metadata.inceptor.max-rows / catalogue-max-entries"
+                };
             }
-            return `数据库实时模糊查询，单次最多 ${limit} 条`;
+            return {
+                text: `数据库实时查询 · 单次最多 ${limit} 条`,
+                title: `单次查询上限 ${limit} 条：由 metadata.inceptor.max-rows 决定默认值，`
+                    + "catalogue-max-entries 决定最大可调值"
+            };
         },
         adjustmentCount() {
             return this.adjustments.length;
@@ -2342,15 +2351,15 @@ createApp({
                     </div>
                 </div>
                 <div class="list-toolbar">
-                    <div>
+                    <div class="list-toolbar-main">
                         <strong>{{ filterSummary }}</strong>
-                        <span v-if="procedureListNote" class="list-toolbar-note">{{ procedureListNote }}</span>
-                        <span v-if="showFavoritesOnly" class="list-toolbar-note">已收藏</span>
+                        <span v-if="showFavoritesOnly" class="list-toolbar-tag">已收藏</span>
+                        <div class="list-toolbar-actions">
+                            <button type="button" title="展开当前所有分组" @click="expandAllGroups">展开</button>
+                            <button type="button" title="收起当前所有分组" @click="collapseAllGroups">收起</button>
+                        </div>
                     </div>
-                    <div class="list-toolbar-actions">
-                        <button type="button" title="展开当前所有分组" @click="expandAllGroups">展开</button>
-                        <button type="button" title="收起当前所有分组" @click="collapseAllGroups">收起</button>
-                    </div>
+                    <p v-if="procedureListNote" class="list-toolbar-note" :title="procedureListNote.title">{{ procedureListNote.text }}</p>
                 </div>
                 <div class="object-list">
                     <template v-if="activeTab === 'tables'">
@@ -2386,14 +2395,21 @@ createApp({
 
                     <template v-if="activeTab === 'procedures'">
                         <div class="catalog-status" v-if="catalogStatus && catalogStatus.enabled">
-                            <div>接入：<strong>已启用</strong> · 表 {{ catalogStatus.procedureTable }}</div>
-                            <div>连接：{{ catalogStatus.endpoint }}</div>
-                            <div>驱动：{{ catalogStatus.driverAvailable ? catalogStatus.driverDescription : "未加载（" + catalogStatus.driverDirectory + "）" }}</div>
-                            <div>连接池：复用 {{ catalogStatus.pool.reusePercent }}%（复用 {{ catalogStatus.pool.reused }} / 借用 {{ catalogStatus.pool.borrowed }}，创建 {{ catalogStatus.pool.created }}）</div>
-                            <div>源码缓存：命中 {{ catalogStatus.cache.hitPercent }}%（命中 {{ catalogStatus.cache.hits }} / 未命中 {{ catalogStatus.cache.misses }}，条目 {{ catalogStatus.cache.entries }}）</div>
-                            <div>过程目录：{{ catalogStatus.index.catalogueSize }} 条，已解析 {{ catalogStatus.index.parsedSize }}，待解析 {{ catalogStatus.index.pendingSize }}</div>
-                            <div v-if="catalogStatus.index.catalogueLoadedAt">目录刷新时间 {{ formatDateTime(catalogStatus.index.catalogueLoadedAt) }}</div>
-                            <div v-else class="muted">过程目录尚未刷新，启动后会自动刷新一次</div>
+                            <div class="catalog-status-head">
+                                <span>接入：<strong>已启用</strong> · 目录 {{ catalogStatus.index.catalogueSize }} 条（待解析 {{ catalogStatus.index.pendingSize }}）</span>
+                                <button type="button" class="catalog-toggle" @click="catalogPanelOpen = !catalogPanelOpen">
+                                    {{ catalogPanelOpen ? "收起" : "详情" }}
+                                </button>
+                            </div>
+                            <template v-if="catalogPanelOpen">
+                                <div>连接：{{ catalogStatus.endpoint }}</div>
+                                <div>驱动：{{ catalogStatus.driverAvailable ? catalogStatus.driverDescription : "未加载（" + catalogStatus.driverDirectory + "）" }}</div>
+                                <div>连接池：复用 {{ catalogStatus.pool.reusePercent }}%（复用 {{ catalogStatus.pool.reused }} / 借用 {{ catalogStatus.pool.borrowed }}，创建 {{ catalogStatus.pool.created }}）</div>
+                                <div>源码缓存：命中 {{ catalogStatus.cache.hitPercent }}%（命中 {{ catalogStatus.cache.hits }} / 未命中 {{ catalogStatus.cache.misses }}，条目 {{ catalogStatus.cache.entries }}）</div>
+                                <div>已解析 {{ catalogStatus.index.parsedSize }} 条 · 表 {{ catalogStatus.procedureTable }}</div>
+                                <div v-if="catalogStatus.index.catalogueLoadedAt">目录刷新时间 {{ formatDateTime(catalogStatus.index.catalogueLoadedAt) }}</div>
+                                <div v-else class="muted">过程目录尚未刷新，启动后会自动刷新一次</div>
+                            </template>
                             <div v-if="catalogStatus.index.lastError" class="catalog-error">{{ catalogStatus.index.lastError }}</div>
                             <div class="catalog-actions">
                                 <button type="button" @click="loadCatalogStatus">刷新统计</button>

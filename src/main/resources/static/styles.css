@@ -497,8 +497,8 @@ button.metric:hover:not(:disabled) {
 .tabs {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 6px;
-    padding: 10px;
+    gap: 8px;
+    padding: 10px 12px;
     border-bottom: 1px solid var(--line);
 }
 
@@ -506,8 +506,8 @@ button.metric:hover:not(:disabled) {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 4px;
-    padding: 8px 10px;
+    gap: 6px;
+    padding: 8px 12px;
     border-bottom: 1px solid var(--line);
     color: var(--muted);
     font-size: 11px;
@@ -573,7 +573,7 @@ button.metric:hover:not(:disabled) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 8px;
-    padding: 10px;
+    padding: 10px 12px;
     border-bottom: 1px solid var(--line);
 }
 
@@ -663,14 +663,19 @@ button.metric:hover:not(:disabled) {
 }
 
 .list-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    min-height: 40px;
-    padding: 0 12px;
+    display: grid;
+    gap: 6px;
+    padding: 8px 12px;
     border-bottom: 1px solid var(--line);
     color: var(--muted);
     font-size: 12px;
+}
+
+.list-toolbar-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 24px;
 }
 
 .list-toolbar strong {
@@ -678,21 +683,37 @@ button.metric:hover:not(:disabled) {
     font-size: 12px;
 }
 
+.list-toolbar-tag {
+    padding: 2px 7px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--panel-muted);
+    color: var(--muted);
+    font-size: 11px;
+}
+
+/* Long hints get their own line so they never squeeze the 展开/收起 buttons. */
 .list-toolbar-note {
-    margin-left: 6px;
+    margin: 0;
+    padding: 5px 8px;
+    border-radius: 6px;
+    background: var(--accent-2-soft);
     color: var(--accent-2);
+    font-size: 11px;
+    line-height: 1.5;
 }
 
 .list-toolbar-actions {
     display: inline-flex;
-    gap: 2px;
+    gap: 4px;
+    margin-left: auto;
 }
 
 .list-toolbar-actions button {
-    min-height: 26px;
-    padding: 0 6px;
+    min-height: 24px;
+    padding: 0 8px;
     border: 0;
-    border-radius: 4px;
+    border-radius: 6px;
     background: transparent;
     color: var(--muted);
     font-size: 11px;
@@ -778,7 +799,7 @@ button.metric:hover:not(:disabled) {
     gap: 8px;
     width: 100%;
     min-height: 34px;
-    padding: 7px 13px;
+    padding: 8px 12px;
     border: 0;
     border-bottom: 1px solid var(--line);
     border-radius: 0;
@@ -835,7 +856,7 @@ button.metric:hover:not(:disabled) {
     display: grid;
     width: 100%;
     gap: 6px;
-    padding: 11px 14px;
+    padding: 11px 12px 12px 13px;
     overflow: hidden;
     border: 0;
     border-bottom: 1px solid var(--line);
@@ -1736,6 +1757,10 @@ button.metric:hover:not(:disabled) {
     animation: section-in 180ms ease both;
 }
 
+.section:last-child {
+    margin-bottom: 0;
+}
+
 @keyframes section-in {
     from { opacity: 0; transform: translateY(4px); }
     to { opacity: 1; transform: translateY(0); }
@@ -1872,6 +1897,10 @@ pre {
 
 .kv .value {
     color: var(--text);
+}
+
+.kv .value .muted {
+    font-size: 12px;
 }
 
 .inline-control {
@@ -2954,31 +2983,66 @@ pre.source-code {
 
 /* 数据库存储过程目录（二期只读接入）*/
 .catalog-status {
-    margin: 10px;
+    display: grid;
+    gap: 2px;
+    margin: 10px 12px;
     padding: 10px 12px;
     border: 1px solid var(--line);
     border-radius: 10px;
     background: var(--panel-muted);
     color: var(--muted);
     font-size: 12px;
-    line-height: 1.7;
+    line-height: 1.5;
 }
 
 .catalog-status strong {
     color: var(--text);
 }
 
-.catalog-actions {
+.catalog-status-head {
     display: flex;
-    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.catalog-status-head > span {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.catalog-toggle {
+    flex: 0 0 auto;
+    min-height: 22px;
+    padding: 0 8px;
+    border-radius: 6px;
+    background: var(--panel);
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.catalog-toggle:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.catalog-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     gap: 6px;
-    margin-top: 6px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+}
+
+/* Inside the panel the error line is part of the flow, not a standalone banner. */
+.catalog-status .catalog-error {
+    margin: 4px 0 0;
 }
 
 .catalog-actions button {
-    flex: 0 1 auto;
+    width: 100%;
     white-space: nowrap;
-    padding: 4px 8px;
+    padding: 5px 8px;
     font-size: 12px;
 }
 
