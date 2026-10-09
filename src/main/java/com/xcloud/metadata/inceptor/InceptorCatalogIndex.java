@@ -151,17 +151,70 @@ public class InceptorCatalogIndex {
         save();
     }
 
-    /** Stores a parsed procedure (source text + dependencies) and drops the "尚未解析" placeholder. */
-    public void putParsed(ProcedureMetadata procedure) {
+    /**
+     * Stores a parsed procedure (source text + dependencies) and drops the "尚未解析" placeholder.
+     *
+     * @return true when the stored entry actually changed. That is the signal for the caller to
+     *         rebuild the metadata snapshot: re-opening an already parsed procedure with the same
+     *         source text costs neither a disk write nor a snapshot rebuild.
+     */
+    public boolean putParsed(ProcedureMetadata procedure) {
         if (procedure == null || procedure.qualifiedName() == null) {
-            return;
+            return false;
         }
         synchronized (lock) {
-            parsed.put(key(procedure.qualifiedName()), procedure);
+            String entryKey = key(procedure.qualifiedName());
+            ProcedureMetadata existing = parsed.get(entryKey);
+            if (sameSource(existing, procedure)) {
+                return false;
+            }
+            parsed.put(entryKey, procedure);
             parsedUpdatedAt = Instant.now();
             evictOldestParsed();
         }
         save();
+        return true;
+    }
+
+    /**
+     * Batch variant of {@link #putParsed}: stores many procedures with a single disk write, instead of
+     * rewriting the whole index file once per procedure.
+     *
+     * @return how many entries actually changed
+     */
+    public int putParsedAll(List<ProcedureMetadata> procedures) {
+        if (procedures == null || procedures.isEmpty()) {
+            return 0;
+        }
+        int changed = 0;
+        synchronized (lock) {
+            for (ProcedureMetadata procedure : procedures) {
+                if (procedure == null || procedure.qualifiedName() == null) {
+                    continue;
+                }
+                String entryKey = key(procedure.qualifiedName());
+                if (sameSource(parsed.get(entryKey), procedure)) {
+                    continue;
+                }
+                parsed.put(entryKey, procedure);
+                changed++;
+            }
+            if (changed > 0) {
+                parsedUpdatedAt = Instant.now();
+                evictOldestParsed();
+            }
+        }
+        if (changed > 0) {
+            save();
+        }
+        return changed;
+    }
+
+    /** Identical source text means identical analysis: everything else is derived from it. */
+    private static boolean sameSource(ProcedureMetadata existing, ProcedureMetadata candidate) {
+        return existing != null
+                && java.util.Objects.equals(existing.qualifiedName(), candidate.qualifiedName())
+                && java.util.Objects.equals(existing.rawSql(), candidate.rawSql());
     }
 
     public void clearParsed() {

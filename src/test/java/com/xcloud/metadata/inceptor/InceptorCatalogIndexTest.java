@@ -147,4 +147,27 @@ class InceptorCatalogIndexTest {
 
         assertEquals(List.of("ADS", "CRSQL"), index.stats().databases());
     }
+
+    @Test
+    void unchangedSourceIsNotStoredAgain() {
+        InceptorCatalogIndex index = newIndex("unchanged.json");
+        index.replaceCatalogue(List.of(summary("ads", "p_one")));
+
+        // First read: the entry is new, so the caller has to rebuild the snapshot.
+        assertTrue(index.putParsed(parsed("ads", "p_one")));
+        // Second read of the same text (i.e. a cache hit): nothing changed, no disk write, no rebuild.
+        assertFalse(index.putParsed(parsed("ads", "p_one")));
+        assertEquals(0, index.putParsedAll(List.of(parsed("ads", "p_one"))));
+
+        // A changed body must be stored again.
+        ProcedureMetadata changed = parsed("ads", "p_one");
+        ProcedureMetadata edited = new ProcedureMetadata(
+                changed.id(), changed.schema(), changed.name(), changed.qualifiedName(), changed.sourceFile(),
+                changed.startLine(), changed.endLine(), changed.signature(), changed.documentation(),
+                changed.parameters(), List.of("ADS.T_OUT"), List.of("ADS.T_IN", "ADS.T_NEW"),
+                List.of("ADS.T_OUT", "ADS.T_IN", "ADS.T_NEW"), changed.calledProcedures(),
+                changed.rawSql() + "\n-- edited");
+        assertTrue(index.putParsed(edited));
+        assertEquals(2, index.parsed("ADS.P_ONE").orElseThrow().sourceTables().size());
+    }
 }

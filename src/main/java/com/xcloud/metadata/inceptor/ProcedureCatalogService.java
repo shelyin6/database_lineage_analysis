@@ -194,6 +194,10 @@ public class ProcedureCatalogService {
                 () -> repository.find(databaseName, procedureName))
                 .orElseThrow(() -> new ProcedureNotFoundException(
                         "未找到存储过程 " + databaseName + "." + procedureName));
+        // Everything after this point is local work: parsing, indexing, snapshot rebuild. The
+        // per-phase numbers go back to the UI so its "耗时" can be reconciled with the
+        // "读取源码：…" line the repository logs for the database part only.
+        long databaseMillis = elapsedMillis(startedAt);
 
         boolean fromCache = repository.cacheStats().hits() > hitsBefore;
         String text = row.fullText() == null ? "" : row.fullText();
@@ -201,11 +205,26 @@ public class ProcedureCatalogService {
             throw new ProcedureNotFoundException("存储过程 " + row.qualifiedName()
                     + " 的 full_text 为空（可能未同步或被加密），无法分析");
         }
+        long parseStartedAt = System.nanoTime();
         ParsedSource parsed = parse(row, text);
+        long parseMillis = elapsedMillis(parseStartedAt);
+
         // Parsing a procedure is what links the database source with the rest of the viewer: the
         // result is stored in the index and merged into the snapshot (tables, 目标表 / 来源表, 血缘).
-        catalogIndex.putParsed(parsed.metadata());
-        reloadSnapshot();
+        long indexStartedAt = System.nanoTime();
+        boolean indexChanged = catalogIndex.putParsed(parsed.metadata());
+        long indexMillis = elapsedMillis(indexStartedAt);
+
+        long snapshotStartedAt = System.nanoTime();
+        if (indexChanged) {
+            reloadSnapshot();
+        }
+        long snapshotMillis = elapsedMillis(snapshotStartedAt);
+        long totalMillis = elapsedMillis(startedAt);
+
+        LOG.info("过程分析：object={}，缓存={}，总计={}ms（数据库={}ms, 解析={}ms, 索引={}ms, 快照={}ms, 索引更新={}）",
+                row.qualifiedName(), fromCache, totalMillis,
+                databaseMillis, parseMillis, indexMillis, snapshotMillis, indexChanged);
         return new CatalogProcedureProfile(
                 row.databaseName(),
                 row.procedureName(),
@@ -217,7 +236,11 @@ public class ProcedureCatalogService {
                 text.length(),
                 fromCache,
                 parsed.headerAdded(),
-                (System.nanoTime() - startedAt) / 1_000_000L,
+                totalMillis,
+                databaseMillis,
+                parseMillis,
+                indexMillis,
+                snapshotMillis,
                 parsed.metadata());
     }
 
@@ -282,13 +305,14 @@ public class ProcedureCatalogService {
             }
             ProcedureMetadata metadata = parse(loaded, text).metadata();
             procedures.add(metadata);
-            catalogIndex.putParsed(metadata);
             targetTables.addAll(metadata.targetTables());
             sourceTables.addAll(metadata.sourceTables());
         }
         if (procedures.isEmpty()) {
             throw new ProcedureNotFoundException("未获取到可用源码：" + String.join("；", skipped));
         }
+        // One disk write for the whole batch instead of one per procedure.
+        catalogIndex.putParsedAll(procedures);
         reloadSnapshot();
 
         boolean fromCache = repository.cacheStats().hits() > hitsBefore;
@@ -355,6 +379,10 @@ public class ProcedureCatalogService {
 
     private long requestTimeoutMillis() {
         return Math.max(1, properties.getRequestTimeoutSeconds()) * 1000L;
+    }
+
+    private static long elapsedMillis(long startedAtNanos) {
+        return (System.nanoTime() - startedAtNanos) / 1_000_000L;
     }
 
     /**

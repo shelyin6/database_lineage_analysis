@@ -34,6 +34,7 @@ createApp({
             catalogStatus: null,
             catalogOwner: "",
             catalogExact: false,
+            procedurePageSize: 0,
             catalogProfile: null,
             catalogBatch: null,
             catalogError: "",
@@ -126,6 +127,16 @@ createApp({
                 if (databases.length > 0) return databases;
             }
             return this.schemas;
+        },
+        /** Hint above the procedure list: single-query cap and whether the result was cut short. */
+        procedureListNote() {
+            if (!(this.activeTab === "procedures" && this.databaseProcedureSearch())) return "";
+            const limit = this.procedurePageSize > 0 ? this.procedurePageSize : (this.catalogStatus?.maxRows || 200);
+            if (this.procedures.length === 0) return "";
+            if (this.procedures.length >= limit) {
+                return `已显示前 ${limit} 条，可能还有更多（加关键字、调大“显示条数”或 metadata.inceptor.max-rows）`;
+            }
+            return `数据库实时模糊查询，单次最多 ${limit} 条`;
         },
         adjustmentCount() {
             return this.adjustments.length;
@@ -1895,6 +1906,9 @@ createApp({
             const params = new URLSearchParams();
             if (this.query.trim()) params.set(this.databaseProcedureSearch() ? "keyword" : "q", this.query.trim());
             if (this.schema) params.set(this.databaseProcedureSearch() ? "database" : "schema", this.schema);
+            if (this.databaseProcedureSearch() && this.procedurePageSize > 0) {
+                params.set("limit", String(this.procedurePageSize));
+            }
             return params.toString();
         },
         async fetchProcedureList(cacheKey, force = false) {
@@ -2301,6 +2315,12 @@ createApp({
                         <option v-for="item in schemaOptions" :key="item" :value="item">{{ item }}</option>
                     </select>
                     <input v-if="activeTab === 'procedures' && databaseProcedureSearch()" v-model="catalogOwner" @keyup.enter="search" placeholder="owner（可选，如 hive）">
+                    <select v-if="activeTab === 'procedures' && databaseProcedureSearch()" v-model.number="procedurePageSize" @change="search" title="单次显示条数">
+                        <option :value="0">默认显示（{{ catalogStatus.maxRows }}）</option>
+                        <option :value="500">显示 500 条</option>
+                        <option :value="1000">显示 1000 条</option>
+                        <option :value="2000">显示 2000 条</option>
+                    </select>
                     <label v-if="activeTab === 'procedures' && databaseProcedureSearch()" class="favorite-filter" :class="{active: catalogExact}">
                         <input type="checkbox" v-model="catalogExact" @change="search">
                         精确匹配
@@ -2324,7 +2344,7 @@ createApp({
                 <div class="list-toolbar">
                     <div>
                         <strong>{{ filterSummary }}</strong>
-                        <span v-if="activeTab === 'procedures' && databaseProcedureSearch()" class="list-toolbar-note">数据库实时模糊查询，最多 {{ catalogStatus.maxRows }} 条</span>
+                        <span v-if="procedureListNote" class="list-toolbar-note">{{ procedureListNote }}</span>
                         <span v-if="showFavoritesOnly" class="list-toolbar-note">已收藏</span>
                     </div>
                     <div class="list-toolbar-actions">
@@ -2688,7 +2708,8 @@ createApp({
                             <div class="key">读取方式</div>
                             <div class="value">
                                 {{ catalogProfile.fromCache ? "源码缓存命中（本次未再读 full_text）" : "本次从数据库读取 full_text" }}
-                                · 耗时 {{ catalogProfile.elapsedMillis }} ms
+                                · 总 {{ catalogProfile.elapsedMillis }} ms
+                                <span class="muted">（数据库 {{ catalogProfile.databaseMillis }} + 解析 {{ catalogProfile.parseMillis }} + 索引 {{ catalogProfile.indexMillis }} + 快照 {{ catalogProfile.snapshotMillis }} ms）</span>
                             </div>
                             <div class="key" v-if="catalogProfile.headerAdded">解析提示</div>
                             <div class="value" v-if="catalogProfile.headerAdded">库中只存过程正文／参数行，分析时已自动补齐 CREATE PROCEDURE 头</div>
