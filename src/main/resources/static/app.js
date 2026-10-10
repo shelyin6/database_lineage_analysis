@@ -42,6 +42,9 @@ createApp({
             catalogRefreshing: false,
             catalogPanelOpen: false,
             detailLoading: false,
+            loadingProcedureId: "",
+            detailError: "",
+            detailRetryItem: null,
             lastSelectedTableId: "",
             lastSelectedProcedureId: "",
             lastTableState: null,
@@ -824,10 +827,17 @@ createApp({
             this.syncHistory(options.history === "none" ? "none" : "push");
         },
         async selectProcedure(procedure, options = {}) {
+            if (this.loadingProcedureId === procedure.id) {
+                // Already reading this one: a second click would only start a duplicate slow request.
+                return;
+            }
             this.selectedTable = null;
             this.procedureFocusLine = Number(options.focusLine || 0);
             const wasUnparsed = this.isUnparsedProcedure(procedure);
             this.detailLoading = true;
+            this.loadingProcedureId = procedure.id;
+            this.detailError = "";
+            this.detailRetryItem = null;
             try {
                 if (this.isDatabaseProcedureItem(procedure)) {
                     // Database procedures are read through the catalogue endpoint: it returns the parsed
@@ -835,27 +845,45 @@ createApp({
                     // result so the table and lineage views pick it up.
                     const database = encodeURIComponent(procedure.schema || "");
                     const name = encodeURIComponent(procedure.name || "");
-                    this.catalogProfile = await this.getJson(`/api/catalog/procedures/${database}/${name}/profile`);
+                    // Wait a little longer than the server side timeout, so the server's own 504 message
+                    // arrives first instead of the browser hanging for minutes.
+                    const seconds = Number(this.catalogStatus?.requestTimeoutSeconds || 60) + 15;
+                    this.catalogProfile = await this.getJson(
+                        `/api/catalog/procedures/${database}/${name}/profile`,
+                        { timeoutMillis: seconds * 1000 });
                     this.selectedProcedure = this.catalogProfile.analysis;
                 } else {
                     this.catalogProfile = null;
                     this.selectedProcedure = await this.getDetail("procedures", procedure.id);
                 }
+            } catch (error) {
+                // A 504/408 means "we stopped waiting"; show it with a retry instead of a silent stall.
+                this.selectedProcedure = null;
+                this.catalogProfile = null;
+                this.detailError = error.message || "读取失败";
+                this.detailRetryItem = procedure;
             } finally {
                 this.detailLoading = false;
+                this.loadingProcedureId = "";
             }
             this.lastSelectedProcedureId = this.selectedProcedure?.id || procedure.id;
-            if (wasUnparsed) {
+            if (!this.detailError && wasUnparsed) {
                 // Reading a database procedure fills in its parameters / referenced tables, and can add
                 // new (inferred) tables. Refresh the visible lists so the left cards show the numbers
                 // right away instead of only after a restart.
                 await this.refreshVisibleList();
                 await this.loadCatalogStatus();
             }
-            if (this.procedureFocusLine > 0) {
+            if (!this.detailError && this.procedureFocusLine > 0) {
                 this.$nextTick(() => this.scrollToProcedureLine(this.procedureFocusLine));
             }
             this.syncHistory(options.history === "none" ? "none" : "push");
+        },
+        retryDetail() {
+            const item = this.detailRetryItem;
+            if (!item) return;
+            this.detailError = "";
+            this.selectProcedure(item);
         },
         async refreshCatalogIndex() {
             this.loading = true;
@@ -912,7 +940,9 @@ createApp({
             this.catalogClearing = true;
             try {
                 this.catalogStatus = await this.getJson("/api/catalog/cache/clear", { method: "POST" });
-                this.success = "源码缓存已清空";
+                // showSuccess() arms the auto-dismiss timer; assigning this.success directly leaves the
+                // toast on screen until something else replaces it.
+                this.showSuccess("源码缓存已清空");
             } catch (error) {
                 this.catalogError = error.message;
             } finally {
@@ -2174,8 +2204,29 @@ createApp({
             return `"${text.replaceAll('"', '""')}"`;
         },
         async getJson(url, options = {}) {
-            const { suppressUnauthorized = false, ...fetchOptions } = options;
-            const response = await fetch(url, { credentials: "same-origin", ...fetchOptions });
+            const { suppressUnauthorized = false, timeoutMillis = 0, ...fetchOptions } = options;
+            let controller = null;
+            let timer = null;
+            if (timeoutMillis > 0 && typeof AbortController !== "undefined") {
+                controller = new AbortController();
+                fetchOptions.signal = controller.signal;
+                timer = window.setTimeout(() => controller.abort(), timeoutMillis);
+            }
+            let response;
+            try {
+                response = await fetch(url, { credentials: "same-origin", ...fetchOptions });
+            } catch (error) {
+                if (controller?.signal.aborted) {
+                    const timeout = new Error(`请求超过 ${Math.round(timeoutMillis / 1000)} 秒未返回，已停止等待`
+                        + "（数据库端可能仍在执行），可稍后重试或先看其它过程");
+                    timeout.status = 408;
+                    timeout.timeout = true;
+                    throw timeout;
+                }
+                throw error;
+            } finally {
+                if (timer) window.clearTimeout(timer);
+            }
             if (!response.ok) {
                 const text = await response.text();
                 let message = text || `HTTP ${response.status}`;
@@ -2405,6 +2456,7 @@ createApp({
                                 <div>连接：{{ catalogStatus.endpoint }}</div>
                                 <div>驱动：{{ catalogStatus.driverAvailable ? catalogStatus.driverDescription : "未加载（" + catalogStatus.driverDirectory + "）" }}</div>
                                 <div>连接池：复用 {{ catalogStatus.pool.reusePercent }}%（复用 {{ catalogStatus.pool.reused }} / 借用 {{ catalogStatus.pool.borrowed }}，创建 {{ catalogStatus.pool.created }}）</div>
+                                <div v-if="catalogStatus.pool.leaked > 0" class="catalog-warn">连接池：已回收 {{ catalogStatus.pool.leaked }} 个疑似泄漏连接（请求超时后被放弃、仍占着池位）</div>
                                 <div>源码缓存：命中 {{ catalogStatus.cache.hitPercent }}%（命中 {{ catalogStatus.cache.hits }} / 未命中 {{ catalogStatus.cache.misses }}，条目 {{ catalogStatus.cache.entries }}）</div>
                                 <div>已解析 {{ catalogStatus.index.parsedSize }} 条 · 表 {{ catalogStatus.procedureTable }}</div>
                                 <div v-if="catalogStatus.index.catalogueLoadedAt">目录刷新时间 {{ formatDateTime(catalogStatus.index.catalogueLoadedAt) }}</div>
@@ -2444,6 +2496,7 @@ createApp({
                                         <span>{{ procedure.name }}</span>
                                         <span v-if="isFavorite(procedure)" class="favorite-indicator" title="已收藏" aria-label="已收藏">★</span>
                                         <span v-if="isUnparsedProcedure(procedure)" class="status-badge">未解析</span>
+                                        <span v-if="loadingProcedureId === procedure.id" class="status-badge loading">读取中…</span>
                                         <span v-if="isAdjusted('PROCEDURE', procedure)" class="status-badge adjustment">调整</span>
                                     </div>
                                     <div class="object-comment">{{ procedure.title || procedure.description || "无过程说明" }}</div>
@@ -2710,8 +2763,15 @@ createApp({
                 </div>
 
                 <div class="detail-body">
-                    <div v-if="!selectedTable && !selectedProcedure" class="empty">从左侧选择表或存储过程查看详情</div>
-                    <div v-if="detailLoading && !selectedProcedure" class="empty">正在读取过程源码并解析（首次约 4~5 秒，之后走缓存）…</div>
+                    <div v-if="!selectedTable && !selectedProcedure && !detailLoading && !detailError" class="empty">从左侧选择表或存储过程查看详情</div>
+                    <div v-if="detailLoading" class="detail-loading">
+                        <span class="spinner" aria-hidden="true"></span>
+                        正在读取过程源码并解析（首次约 4~5 秒，之后走缓存；同一过程只会读取一次）…
+                    </div>
+                    <div v-if="detailError" class="detail-error">
+                        <span>{{ detailError }}</span>
+                        <button v-if="detailRetryItem" type="button" @click="retryDetail">重试</button>
+                    </div>
 
                     <section class="section" v-if="selectedProcedure && catalogProfile">
                         <div class="section-title"><h3>数据库来源</h3></div>

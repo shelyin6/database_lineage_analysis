@@ -71,6 +71,16 @@ public class InceptorProperties {
     /** An idle connection older than this is closed instead of reused. */
     private int connectionIdleSeconds = 300;
 
+    /**
+     * A connection held longer than this is treated as leaked and closed.
+     *
+     * <p>When a request is abandoned on timeout the JDBC call keeps running on the database and still
+     * holds its pooled connection. Without this guard one or two such orphans would fill a small pool
+     * and every later request would fail with "连接池已满". Must stay comfortably above
+     * {@code request-timeout-seconds}.
+     */
+    private int connectionMaxBorrowSeconds = 120;
+
     /** How long a request waits for a free connection before failing. */
     private int connectionWaitMillis = 5000;
 
@@ -230,6 +240,14 @@ public class InceptorProperties {
 
     public void setConnectionIdleSeconds(int connectionIdleSeconds) {
         this.connectionIdleSeconds = connectionIdleSeconds;
+    }
+
+    public int getConnectionMaxBorrowSeconds() {
+        return connectionMaxBorrowSeconds;
+    }
+
+    public void setConnectionMaxBorrowSeconds(int connectionMaxBorrowSeconds) {
+        this.connectionMaxBorrowSeconds = connectionMaxBorrowSeconds;
     }
 
     public int getConnectionWaitMillis() {

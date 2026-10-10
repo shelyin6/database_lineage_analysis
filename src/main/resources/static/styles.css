@@ -969,6 +969,12 @@ button.metric:hover:not(:disabled) {
     color: var(--faint);
 }
 
+.status-badge.loading {
+    border-color: rgba(8, 127, 140, 0.3);
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
 :root[data-theme="dark"] .status-badge.adjustment {
     border-color: #7d4d2c;
     background: #3a281e;
@@ -3060,4 +3066,57 @@ pre.source-code {
     margin: 8px 10px;
     color: var(--muted);
     font-size: 12px;
+}
+
+.catalog-warn {
+    color: var(--accent-2);
+}
+
+/* Reading a database procedure the first time takes seconds: show progress instead of a frozen pane. */
+.detail-loading {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-bottom: 14px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel-muted);
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.spinner {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--line-strong);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 720ms linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Timeout / failure of one read: explain it and offer a retry instead of a silent stall. */
+.detail-error {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+    padding: 10px 12px;
+    border: 1px solid var(--danger);
+    border-radius: var(--radius);
+    background: var(--danger-soft);
+    color: var(--danger);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.detail-error button {
+    flex: 0 0 auto;
 }

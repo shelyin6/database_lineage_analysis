@@ -32,6 +32,7 @@ public record CatalogStatus(
             long borrowed,
             long reused,
             long discarded,
+            long leaked,
             int reusePercent
     ) {
         static Pool of(InceptorConnectionPool.PoolStats stats) {
@@ -43,6 +44,7 @@ public record CatalogStatus(
                     stats.borrowed(),
                     stats.reused(),
                     stats.discarded(),
+                    stats.leaked(),
                     stats.reusePercent());
         }
     }

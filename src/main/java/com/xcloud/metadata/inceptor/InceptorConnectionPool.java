@@ -3,8 +3,12 @@ package com.xcloud.metadata.inceptor;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,6 +30,8 @@ public class InceptorConnectionPool implements AutoCloseable {
     private final InceptorProperties properties;
     private final InceptorDriverLoader driverLoader;
     private final Deque<IdleConnection> idle = new ArrayDeque<>();
+    /** Identity map: which pooled connection is currently borrowed, and since when. */
+    private final Map<Connection, Long> borrowedAt = new IdentityHashMap<>();
     private final Object lock = new Object();
 
     private int openCount;
@@ -33,6 +39,7 @@ public class InceptorConnectionPool implements AutoCloseable {
     private long borrowedCount;
     private long reusedCount;
     private long discardedCount;
+    private long leakedCount;
     private boolean closed;
 
     public InceptorConnectionPool(InceptorProperties properties, InceptorDriverLoader driverLoader) {
@@ -51,6 +58,7 @@ public class InceptorConnectionPool implements AutoCloseable {
                     if (isUsable(candidate.connection())) {
                         reusedCount++;
                         borrowedCount++;
+                        borrowedAt.put(candidate.connection(), System.currentTimeMillis());
                         return candidate.connection();
                     }
                     closeInternal(candidate.connection());
@@ -84,6 +92,7 @@ public class InceptorConnectionPool implements AutoCloseable {
             synchronized (lock) {
                 createdCount++;
                 borrowedCount++;
+                borrowedAt.put(connection, System.currentTimeMillis());
             }
             return connection;
         } catch (SQLException exception) {
@@ -101,6 +110,7 @@ public class InceptorConnectionPool implements AutoCloseable {
             return;
         }
         synchronized (lock) {
+            borrowedAt.remove(connection);
             if (closed || !isUsable(connection)) {
                 closeInternal(connection);
             } else {
@@ -116,6 +126,7 @@ public class InceptorConnectionPool implements AutoCloseable {
             return;
         }
         synchronized (lock) {
+            borrowedAt.remove(connection);
             closeInternal(connection);
             lock.notifyAll();
         }
@@ -133,6 +144,7 @@ public class InceptorConnectionPool implements AutoCloseable {
                     total,
                     hits,
                     discardedCount,
+                    leakedCount,
                     total == 0 ? 0 : (int) Math.round(hits * 100.0 / total));
         }
     }
@@ -154,6 +166,7 @@ public class InceptorConnectionPool implements AutoCloseable {
 
     private void purgeExpiredIdle() {
         long maxIdleMillis = Math.max(1, properties.getConnectionIdleSeconds()) * 1000L;
+        long maxBorrowMillis = Math.max(1, properties.getConnectionMaxBorrowSeconds()) * 1000L;
         long now = System.currentTimeMillis();
         Iterator<IdleConnection> iterator = idle.iterator();
         while (iterator.hasNext()) {
@@ -162,6 +175,22 @@ public class InceptorConnectionPool implements AutoCloseable {
                 iterator.remove();
                 closeInternal(entry.connection());
             }
+        }
+        // A caller that was abandoned on timeout keeps holding its connection until the driver
+        // finally returns, which may never happen. Reclaim the slot instead of starving the pool.
+        // Collect first, then remove: IdentityHashMap's iterator does not support removal.
+        List<Connection> leaked = new ArrayList<>();
+        for (Map.Entry<Connection, Long> entry : borrowedAt.entrySet()) {
+            if (now - entry.getValue() > maxBorrowMillis) {
+                leaked.add(entry.getKey());
+            }
+        }
+        for (Connection connection : leaked) {
+            borrowedAt.remove(connection);
+            leakedCount++;
+            LOG.warn("连接被占用超过 {} 秒仍未归还（多半是请求超时后被放弃的查询），已强制关闭并释放池位",
+                    properties.getConnectionMaxBorrowSeconds());
+            closeInternal(connection);
         }
     }
 
@@ -211,6 +240,7 @@ public class InceptorConnectionPool implements AutoCloseable {
             long borrowed,
             long reused,
             long discarded,
+            long leaked,
             int reusePercent
     ) {
     }

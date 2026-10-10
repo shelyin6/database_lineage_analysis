@@ -9,6 +9,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.TreeSet;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,6 +44,14 @@ public class ProcedureCatalogService {
     private final InceptorCatalogIndex catalogIndex;
     private final MetadataService metadataService;
     private final SqlMetadataParser parser = new SqlMetadataParser();
+    /**
+     * Reads that are running right now, keyed by {@code database.procedure}.
+     *
+     * <p>Reading {@code full_text} costs 4-5 s through the dblink backed view, and the list
+     * auto-select plus a user click can easily ask for the same procedure at the same moment. Both
+     * callers now share one read instead of hammering the remote view twice.
+     */
+    private final Map<String, CompletableFuture<CatalogProcedureProfile>> inFlight = new ConcurrentHashMap<>();
 
     public ProcedureCatalogService(
             InceptorProperties properties,
@@ -185,6 +197,53 @@ public class ProcedureCatalogService {
      */
     public CatalogProcedureProfile profile(String databaseName, String procedureName) {
         requireEnabled();
+        String key = ((databaseName == null ? "" : databaseName.trim()) + "."
+                + (procedureName == null ? "" : procedureName.trim())).toLowerCase(java.util.Locale.ROOT);
+        CompletableFuture<CatalogProcedureProfile> mine = new CompletableFuture<>();
+        CompletableFuture<CatalogProcedureProfile> running = inFlight.putIfAbsent(key, mine);
+        if (running != null) {
+            return awaitRunning(running, databaseName, procedureName);
+        }
+        try {
+            CatalogProcedureProfile loaded = loadProfile(databaseName, procedureName);
+            mine.complete(loaded);
+            return loaded;
+        } catch (RuntimeException exception) {
+            mine.completeExceptionally(exception);
+            throw exception;
+        } finally {
+            inFlight.remove(key, mine);
+        }
+    }
+
+    /** Waits for the read that is already in flight instead of starting a second identical one. */
+    private CatalogProcedureProfile awaitRunning(
+            CompletableFuture<CatalogProcedureProfile> running,
+            String databaseName,
+            String procedureName
+    ) {
+        long waitSeconds = Math.max(1, properties.getRequestTimeoutSeconds() - 2);
+        LOG.info("读取存储过程内容：{}.{} 正在读取中，复用同一次结果（等待上限 {}s）",
+                databaseName, procedureName, waitSeconds);
+        try {
+            return running.get(waitSeconds, TimeUnit.SECONDS);
+        } catch (TimeoutException exception) {
+            throw new InceptorTimeoutException("已有一次 " + databaseName + "." + procedureName
+                    + " 的读取在进行中，等待 " + waitSeconds + " 秒仍未返回，已放弃等待；可稍后重试");
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new InceptorUnavailableException("等待同一存储过程的读取结果时被中断");
+        } catch (java.util.concurrent.ExecutionException exception) {
+            Throwable cause = exception.getCause();
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw new InceptorUnavailableException(
+                    "读取 " + databaseName + "." + procedureName + " 失败：" + cause.getMessage());
+        }
+    }
+
+    private CatalogProcedureProfile loadProfile(String databaseName, String procedureName) {
         long startedAt = System.nanoTime();
         long hitsBefore = repository.cacheStats().hits();
 

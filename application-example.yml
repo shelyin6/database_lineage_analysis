@@ -49,6 +49,9 @@ metadata:
     pool-size: 2
     connection-idle-seconds: 300
     connection-wait-millis: 5000
+    # 请求超时被放弃后，数据库端可能仍在执行并占着连接；超过这个时间仍没归还就视为泄漏，
+    # 强制关闭并释放池位（应明显大于 request-timeout-seconds）
+    connection-max-borrow-seconds: 120
     # 源码缓存：full_text 一次读取约 4~5 秒，命中后接近 0
     cache-enabled: true
     cache-max-entries: 200
