@@ -122,6 +122,17 @@ createApp({
         activeItemCount() {
             return this.visibleItems.length;
         },
+        /**
+         * 左上角状态行：接数据库后"多少个 SQL 文件"已无意义，改为展示过程目录与解析进度。
+         */
+        brandSummary() {
+            const index = this.catalogStatus?.index;
+            if (this.catalogStatus?.enabled && index) {
+                return `过程目录 ${this.formatNumber(index.catalogueSize)} 条 · 已解析 ${this.formatNumber(index.parsedSize)} 条 · 待解析 ${this.formatNumber(index.pendingSize)} 条`;
+            }
+            if (!this.summary) return "";
+            return `最近解析 ${this.formatDateTime(this.summary.loadedAt)} · ${this.summary.sourceFiles.length} 个 SQL 文件`;
+        },
         schemaOptions() {
             // With the database source enabled the procedure list is a live query against
             // system.procedures_v, so the filter has to offer the databases of the catalogue
@@ -951,6 +962,39 @@ createApp({
         },
         isDatabaseProcedureItem(procedure) {
             return String(procedure?.sourceFile || "").startsWith("inceptor://");
+        },
+        /**
+         * 展示层去掉 inceptor:// 前缀。
+         *
+         * <p>该前缀是功能标记（前端据此调用 profile 接口、后端据此生成"库内推断"表），所以只处理显示，
+         * 不改动数据本身。
+         */
+        stripInceptorPrefix(source) {
+            const text = String(source || "");
+            const prefix = "inceptor://";
+            return text.startsWith(prefix) ? text.slice(prefix.length) : text;
+        },
+        /** 列表里的来源标签：库内过程用"库.过程名"（不带行号），本地文件仍带起始行。 */
+        procedureSourceText(procedure, options = {}) {
+            if (!procedure) return "";
+            const label = this.stripInceptorPrefix(procedure.sourceFile);
+            if (!options.withLine) return label;
+            const range = options.range
+                ? `${procedure.startLine}-${procedure.endLine}`
+                : String(procedure.startLine);
+            // 行号只在"原文行"语境下有意义，库内过程改成"第 x-y 行"，避免出现 :1-1 这种误解。
+            return this.isDatabaseProcedureItem(procedure) ? `${label} · 第 ${range} 行` : `${label}:${range}`;
+        },
+        /** 表的来源：库内推断表指向推断出它的存储过程，本地表仍显示文件与行号。 */
+        tableSourceText(table, options = {}) {
+            if (!table) return "";
+            const source = String(table.sourceFile || "");
+            if (source.startsWith("inceptor://")) {
+                return `由 ${this.stripInceptorPrefix(source)} 推断`;
+            }
+            return options.range
+                ? `${source}:${table.startLine}-${table.endLine}`
+                : `${source}:${table.startLine}`;
         },
         isUnparsedProcedure(procedure) {
             if (procedure?.parsed === false) return true;
@@ -2302,7 +2346,7 @@ createApp({
                 <div>
                     <h1>SQL 元数据查看器</h1>
                     <p>表结构、存储过程与数据流血缘</p>
-                    <div v-if="summary" class="brand-status">最近解析 {{ formatDateTime(summary.loadedAt) }} · {{ summary.sourceFiles.length }} 个 SQL 文件</div>
+                    <div v-if="summary" class="brand-status">{{ brandSummary }}</div>
                 </div>
             </div>
             <div class="topbar-tools">
@@ -2437,7 +2481,7 @@ createApp({
                                     </div>
                                     <div class="object-comment">{{ table.manualComment || table.comment || "无表注释" }}</div>
                                     <div class="object-meta">
-                                        {{ table.sourceFile }}:{{ table.startLine }} · 字段 {{ table.columnCount }} · 加工 {{ table.targetProcedureCount }} · 来源 {{ table.sourceProcedureCount }}
+                                        {{ tableSourceText(table) }} · 字段 {{ table.columnCount }} · 加工 {{ table.targetProcedureCount }} · 来源 {{ table.sourceProcedureCount }}
                                     </div>
                                 </button>
                             </template>
@@ -2501,8 +2545,8 @@ createApp({
                                     </div>
                                     <div class="object-comment">{{ procedure.title || procedure.description || "无过程说明" }}</div>
                                     <div class="object-meta">
-                                        <template v-if="isUnparsedProcedure(procedure)">来自数据库 · 点开后读取源码并解析</template>
-                                        <template v-else>{{ procedure.sourceFile }}:{{ procedure.startLine }} · 参数 {{ procedure.parameterCount }} · 引用表 {{ procedure.referencedTableCount }} · 调用 {{ procedure.calledProcedureCount }}</template>
+                                        <template v-if="isUnparsedProcedure(procedure)">未解析 · 点开即读取源码并解析</template>
+                                        <template v-else>{{ procedureSourceText(procedure) }} · 参数 {{ procedure.parameterCount }} · 引用表 {{ procedure.referencedTableCount }} · 调用 {{ procedure.calledProcedureCount }}</template>
                                     </div>
                                 </button>
                             </template>
@@ -2725,10 +2769,10 @@ createApp({
                         <div>
                             <h2>{{ detailTitle }}</h2>
                             <div class="detail-subtitle" v-if="selectedTable">
-                                {{ selectedTable.table.sourceFile }}:{{ selectedTable.table.startLine }}-{{ selectedTable.table.endLine }}
+                                {{ tableSourceText(selectedTable.table, { range: true }) }}
                             </div>
                             <div class="detail-subtitle" v-if="selectedProcedure">
-                                {{ selectedProcedure.sourceFile }}:{{ selectedProcedure.startLine }}-{{ selectedProcedure.endLine }}
+                                {{ procedureSourceText(selectedProcedure, { withLine: true, range: true }) }}
                             </div>
                         </div>
                         <div class="detail-actions">
