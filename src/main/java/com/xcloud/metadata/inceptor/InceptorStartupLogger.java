@@ -45,6 +45,9 @@ public class InceptorStartupLogger implements ApplicationRunner {
                 properties.getProcedureTable(),
                 driverLoader.driverDirectory(),
                 sanitize(properties.getUrl()));
+        LOG.info("本次运行的构建：version={}，build.time={}（升级后可对比此时间确认新包已生效）",
+                BuildInfo.version().isBlank() ? "(未生成 build-info)" : BuildInfo.version(),
+                BuildInfo.builtAt().isBlank() ? "(未生成 build-info)" : BuildInfo.builtAt());
         if (properties.isEnabled()) {
             // Deliberately does NOT touch driverLoader.description()/isAvailable(): resolving the
             // driver here would run the vendor driver's static initialiser during start up and make

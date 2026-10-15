@@ -12,6 +12,13 @@ server:
 spring:
   application:
     name: sql-metadata-viewer
+  # 静态资源禁用浏览器缓存：升级 jar 后刷新页面即可看到新界面（否则可能命中旧缓存）
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          no-store: true
+          no-cache: true
 
 metadata:
   # Relative paths are resolved beside the executable jar.

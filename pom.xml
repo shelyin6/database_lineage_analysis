@@ -43,6 +43,16 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <executions>
+                    <!-- 生成 META-INF/build-info.properties：部署后可从启动日志、/api/catalog/status
+                         与界面左上角确认"正在运行的是哪一次构建"，避免误判为界面没更新。 -->
+                    <execution>
+                        <id>build-info</id>
+                        <goals>
+                            <goal>build-info</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

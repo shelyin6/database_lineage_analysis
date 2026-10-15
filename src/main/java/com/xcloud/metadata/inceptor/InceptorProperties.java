@@ -118,8 +118,15 @@ public class InceptorProperties {
      */
     private boolean catalogueRefreshOnStartup = true;
 
-    /** Hard upper bound for one catalogue refresh; 0 means "use max-rows". */
-    private int catalogueMaxEntries = 10000;
+    /**
+     * Hard upper bound for one catalogue refresh; 0 means "use max-rows".
+     *
+     * <p>This is a {@code LIMIT}: if the metadata view holds more rows than this, the catalogue is
+     * silently short of procedures. The refresh reports when the result hits this bound (a warning in
+     * the log, a hint in the UI), so keep it comfortably above the number of rows in
+     * {@code system.procedures_v} - the query only selects name/owner/create time.
+     */
+    private int catalogueMaxEntries = 20000;
 
     /**
      * File holding the catalogue and the already parsed procedures, so the index survives a restart

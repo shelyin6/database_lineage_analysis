@@ -127,11 +127,17 @@ createApp({
          */
         brandSummary() {
             const index = this.catalogStatus?.index;
+            const build = this.catalogStatus?.appBuiltAt
+                ? ` · 构建 ${this.formatDateTime(this.catalogStatus.appBuiltAt)}`
+                : "";
             if (this.catalogStatus?.enabled && index) {
-                return `过程目录 ${this.formatNumber(index.catalogueSize)} 条 · 已解析 ${this.formatNumber(index.parsedSize)} 条 · 待解析 ${this.formatNumber(index.pendingSize)} 条`;
+                const merged = index.rowsRead > index.catalogueSize
+                    ? ` · 读取 ${this.formatNumber(index.rowsRead)} 行`
+                    : "";
+                return `过程目录 ${this.formatNumber(index.catalogueSize)} 条 · 已解析 ${this.formatNumber(index.parsedSize)} 条 · 待解析 ${this.formatNumber(index.pendingSize)} 条${merged}${build}`;
             }
             if (!this.summary) return "";
-            return `最近解析 ${this.formatDateTime(this.summary.loadedAt)} · ${this.summary.sourceFiles.length} 个 SQL 文件`;
+            return `最近解析 ${this.formatDateTime(this.summary.loadedAt)} · ${this.summary.sourceFiles.length} 个 SQL 文件${build}`;
         },
         schemaOptions() {
             // With the database source enabled the procedure list is a live query against
@@ -142,6 +148,16 @@ createApp({
                 if (databases.length > 0) return databases;
             }
             return this.schemas;
+        },
+        /** True when 刷新过程目录 would apply the current keyword/database/owner filters. */
+        catalogueRefreshHasFilter() {
+            return Boolean(this.query.trim() || this.schema || this.catalogOwner.trim() || this.catalogExact);
+        },
+        catalogueRefreshHint() {
+            // computed 是属性不是函数：这里不能写成 catalogueRefreshHasFilter()
+            return this.catalogueRefreshHasFilter
+                ? "按当前关键字/库名/owner 刷新：目录会被这次筛选结果替换（如需全量请先清空筛选）"
+                : "全量刷新过程目录（只查过程名等元数据，不读 full_text）";
         },
         /** Hint above the procedure list: single-query cap and whether the result was cut short. */
         procedureListNote() {
@@ -907,7 +923,11 @@ createApp({
                 if (this.catalogOwner.trim()) params.set("owner", this.catalogOwner.trim());
                 if (this.catalogExact) params.set("exact", "true");
                 this.catalogStatus = await this.getJson(`/api/catalog/refresh?${params.toString()}`, { method: "POST" });
-                this.showSuccess(`已刷新过程目录：${this.catalogStatus.index.catalogueSize} 条，可在“存储过程”页签查看`);
+                const index = this.catalogStatus.index;
+                const merged = index.rowsRead > index.catalogueSize
+                    ? `（读取 ${index.rowsRead} 行，去重 ${index.rowsRead - index.catalogueSize}）`
+                    : "";
+                this.showSuccess(`已刷新过程目录：${index.catalogueSize} 条${merged}，筛选：${index.lastFilter}`);
                 this.clearCaches();
                 await this.refreshVisibleList();
             } catch (error) {
@@ -2503,14 +2523,21 @@ createApp({
                                 <div v-if="catalogStatus.pool.leaked > 0" class="catalog-warn">连接池：已回收 {{ catalogStatus.pool.leaked }} 个疑似泄漏连接（请求超时后被放弃、仍占着池位）</div>
                                 <div>源码缓存：命中 {{ catalogStatus.cache.hitPercent }}%（命中 {{ catalogStatus.cache.hits }} / 未命中 {{ catalogStatus.cache.misses }}，条目 {{ catalogStatus.cache.entries }}）</div>
                                 <div>已解析 {{ catalogStatus.index.parsedSize }} 条 · 表 {{ catalogStatus.procedureTable }}</div>
+                                <div>本次目录读取 {{ catalogStatus.index.rowsRead }} 行 · 去重后 {{ catalogStatus.index.catalogueSize }} 个 · 筛选：{{ catalogStatus.index.lastFilter }}</div>
+                                <div v-if="catalogStatus.index.rowsRead > catalogStatus.index.catalogueSize" class="catalog-warn">
+                                    {{ catalogStatus.index.rowsRead - catalogStatus.index.catalogueSize }} 行与已入库过程同名（database.procedure 相同，多为同名不同 owner），目录里合并为一项
+                                </div>
+                                <div v-if="catalogStatus.index.truncated" class="catalog-warn">
+                                    已达单次读取上限 {{ catalogStatus.index.limit }} 行，目录可能不完整：请调大 metadata.inceptor.catalogue-max-entries 后重新刷新
+                                </div>
                                 <div v-if="catalogStatus.index.catalogueLoadedAt">目录刷新时间 {{ formatDateTime(catalogStatus.index.catalogueLoadedAt) }}</div>
                                 <div v-else class="muted">过程目录尚未刷新，启动后会自动刷新一次</div>
                             </template>
                             <div v-if="catalogStatus.index.lastError" class="catalog-error">{{ catalogStatus.index.lastError }}</div>
                             <div class="catalog-actions">
                                 <button type="button" @click="loadCatalogStatus">刷新统计</button>
-                                <button type="button" :disabled="loading || catalogRefreshing" @click="refreshCatalogIndex">
-                                    {{ catalogRefreshing ? "刷新中…" : "刷新过程目录" }}
+                                <button type="button" :disabled="loading || catalogRefreshing" :title="catalogueRefreshHint" @click="refreshCatalogIndex">
+                                    {{ catalogRefreshing ? "刷新中…" : (catalogueRefreshHasFilter ? "刷新（按当前筛选）" : "刷新过程目录") }}
                                 </button>
                                 <button type="button" :disabled="loading" @click="analyzeCatalogBatch">解析并索引匹配过程</button>
                                 <button type="button" :disabled="catalogClearing" @click="clearCatalogCache">

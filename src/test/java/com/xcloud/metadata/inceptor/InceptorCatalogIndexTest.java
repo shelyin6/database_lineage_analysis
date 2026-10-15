@@ -170,4 +170,43 @@ class InceptorCatalogIndexTest {
         assertTrue(index.putParsed(edited));
         assertEquals(2, index.parsed("ADS.P_ONE").orElseThrow().sourceTables().size());
     }
+
+    @Test
+    void rowsReadAndUniqueEntriesAreReportedSeparately() {
+        InceptorCatalogIndex index = newIndex("dedupe.json");
+        // The metadata view can expose the same database.procedure more than once (for example once
+        // per owner); count(*) counts rows, the catalogue is keyed by database.procedure.
+        index.replaceCatalogue(List.of(
+                summary("ads", "p_one"),
+                summary("ads", "p_one"),
+                summary("ads", "p_two")), "全量");
+
+        assertEquals(3, index.stats().rowsRead());
+        assertEquals(2, index.stats().catalogueSize());
+        assertEquals("全量", index.stats().lastFilter());
+    }
+
+    @Test
+    void filteredRefreshIsRecordedInTheStats() {
+        InceptorCatalogIndex index = newIndex("filtered.json");
+        index.replaceCatalogue(List.of(summary("ads", "p_one")), "database=ads");
+
+        assertEquals("database=ads", index.stats().lastFilter());
+        assertEquals(1, index.stats().rowsRead());
+    }
+
+    @Test
+    void refreshThatHitsTheLimitIsMarkedAsTruncated() {
+        InceptorCatalogIndex index = newIndex("truncated.json");
+        // The metadata view had 10189 rows while the configured LIMIT was 10000: the catalogue ends up
+        // short of procedures, so the caller must be able to tell the operator about it.
+        index.replaceCatalogue(List.of(summary("ads", "p_one")), "全量", 1);
+
+        assertEquals(1, index.stats().limit());
+        assertTrue(index.stats().truncated());
+
+        index.replaceCatalogue(List.of(summary("ads", "p_one")), "全量", 100);
+        assertEquals(100, index.stats().limit());
+        assertFalse(index.stats().truncated());
+    }
 }

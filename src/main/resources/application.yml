@@ -9,6 +9,14 @@ server:
 spring:
   application:
     name: sql-metadata-viewer
+  # 静态资源（index.html / app.js / styles.css）不打浏览器缓存：
+  # 内网反复升级时，浏览器若沿用旧缓存会出现"界面没变化"的假象。
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          no-store: true
+          no-cache: true
 
 metadata:
   annotation-database: metadata.sqlite

@@ -59,6 +59,14 @@ public class InceptorCatalogIndex {
     private volatile Instant catalogueLoadedAt;
     private volatile Instant parsedUpdatedAt;
     private volatile String lastError = "";
+    /** Rows the last catalogue query actually returned (before de-duplication). */
+    private volatile int lastRowsRead;
+    /** Filter used by the last catalogue refresh, for example "全量" or "database=ads". */
+    private volatile String lastFilter = "";
+    /** LIMIT used by the last catalogue refresh (0 when unknown). */
+    private volatile int lastLimit;
+    /** True when the last refresh returned as many rows as the LIMIT allowed: the catalogue may be short. */
+    private volatile boolean truncated;
 
     public InceptorCatalogIndex(InceptorProperties properties, MetadataProperties metadataProperties) {
         this.properties = properties;
@@ -136,6 +144,25 @@ public class InceptorCatalogIndex {
 
     /** Replaces the catalogue with a fresh listing. Parsed procedures are kept. */
     public void replaceCatalogue(List<CatalogProcedureSummary> rows) {
+        replaceCatalogue(rows, "全量", 0);
+    }
+
+    public void replaceCatalogue(List<CatalogProcedureSummary> rows, String filter) {
+        replaceCatalogue(rows, filter, 0);
+    }
+
+    /**
+     * Replaces the catalogue with a fresh listing.
+     *
+     * <p>The catalogue is keyed by {@code database.procedure}, so rows that share that key (the view can
+     * expose the same procedure more than once, for example once per owner) collapse into one entry.
+     * {@code rows} records how many rows the query returned, which is what makes that visible in the
+     * status panel instead of looking like a missing refresh.
+     *
+     * @param filter human readable description of the condition used for this refresh
+     * @param limit  LIMIT used by the query, so the caller can be told when the result was cut short
+     */
+    public void replaceCatalogue(List<CatalogProcedureSummary> rows, String filter, int limit) {
         synchronized (lock) {
             catalogue.clear();
             if (rows != null) {
@@ -147,6 +174,10 @@ public class InceptorCatalogIndex {
             }
             catalogueLoadedAt = Instant.now();
             lastError = "";
+            lastRowsRead = rows == null ? 0 : rows.size();
+            lastFilter = filter == null || filter.isBlank() ? "全量" : filter;
+            lastLimit = Math.max(0, limit);
+            truncated = lastLimit > 0 && lastRowsRead >= lastLimit;
         }
         save();
     }
@@ -269,7 +300,11 @@ public class InceptorCatalogIndex {
                     catalogueLoadedAt,
                     parsedUpdatedAt,
                     lastError,
-                    List.copyOf(databases));
+                    List.copyOf(databases),
+                    lastRowsRead,
+                    lastFilter,
+                    lastLimit,
+                    truncated);
         }
     }
 
@@ -391,7 +426,11 @@ public class InceptorCatalogIndex {
             Instant catalogueLoadedAt,
             Instant parsedUpdatedAt,
             String lastError,
-            List<String> databases
+            List<String> databases,
+            int rowsRead,
+            String lastFilter,
+            int limit,
+            boolean truncated
     ) {
     }
 }

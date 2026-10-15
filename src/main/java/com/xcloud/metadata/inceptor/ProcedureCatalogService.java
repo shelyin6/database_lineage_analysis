@@ -83,7 +83,9 @@ public class ProcedureCatalogService {
                 properties.getConnectionIdleSeconds(),
                 CatalogStatus.Pool.of(repository.poolStats()),
                 CatalogStatus.Cache.of(repository.cacheStats()),
-                CatalogStatus.Index.of(catalogIndex.stats(), catalogIndex.indexFile().toAbsolutePath().toString()));
+                CatalogStatus.Index.of(catalogIndex.stats(), catalogIndex.indexFile().toAbsolutePath().toString()),
+                BuildInfo.version(),
+                BuildInfo.builtAt());
     }
 
     /** Drops every cached source text; the next preview/analysis reads from the database again. */
@@ -133,15 +135,43 @@ public class ProcedureCatalogService {
                     () -> repository.search(keyword, database, owner, exact, requested, cap).stream()
                             .map(CatalogProcedureSummary::of)
                             .toList());
-            catalogIndex.replaceCatalogue(rows);
+            String filter = describeFilter(keyword, database, owner, exact);
+            catalogIndex.replaceCatalogue(rows, filter, requested);
             reloadSnapshot();
-            LOG.info("存储过程目录已刷新：{} 条（keyword={}, database={}, owner={}, 上限={}），耗时 {}ms",
-                    rows.size(), keyword, database, owner, requested, (System.nanoTime() - startedAt) / 1_000_000L);
+            int unique = catalogIndex.stats().catalogueSize();
+            // Log both numbers: a SELECT count(*) on the metadata view counts rows, while the catalogue
+            // is keyed by database.procedure, so duplicates collapse here.
+            LOG.info("存储过程目录已刷新：读取 {} 行，去重后 {} 个（{}；上限={}），耗时 {}ms",
+                    rows.size(), unique, filter, requested, (System.nanoTime() - startedAt) / 1_000_000L);
+            if (rows.size() > unique) {
+                LOG.info("其中 {} 行与已入库过程同名（database.procedure 相同，多为同名不同 owner），已合并为一个目录项",
+                        rows.size() - unique);
+            }
+            if (rows.size() >= requested) {
+                LOG.warn("过程目录已达单次读取上限 {} 行，可能被截断（元数据表里的行数可能更多）："
+                                + "请调大 metadata.inceptor.catalogue-max-entries，或按 database 分批刷新",
+                        requested);
+            }
         } catch (RuntimeException exception) {
             catalogIndex.setLastError(exception.getMessage());
             throw exception;
         }
         return status();
+    }
+
+    /** Human readable description of the condition used for a catalogue refresh. */
+    private static String describeFilter(String keyword, String database, String owner, boolean exact) {
+        List<String> parts = new ArrayList<>();
+        if (keyword != null && !keyword.isBlank()) {
+            parts.add("keyword=" + keyword.trim() + (exact ? "(精确)" : "(模糊)"));
+        }
+        if (database != null && !database.isBlank()) {
+            parts.add("database=" + database.trim());
+        }
+        if (owner != null && !owner.isBlank()) {
+            parts.add("owner=" + owner.trim());
+        }
+        return parts.isEmpty() ? "全量" : String.join(", ", parts);
     }
 
     /** Verifies connectivity; only available when the feature is enabled. */

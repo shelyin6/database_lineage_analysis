@@ -21,7 +21,9 @@ public record CatalogStatus(
         int connectionIdleSeconds,
         Pool pool,
         Cache cache,
-        Index index
+        Index index,
+        String appVersion,
+        String appBuiltAt
 ) {
 
     public record Pool(
@@ -82,7 +84,11 @@ public record CatalogStatus(
             String parsedUpdatedAt,
             String indexFile,
             String lastError,
-            java.util.List<String> databases
+            java.util.List<String> databases,
+            int rowsRead,
+            String lastFilter,
+            int limit,
+            boolean truncated
     ) {
         static Index of(InceptorCatalogIndex.Stats stats, String indexFile) {
             return new Index(
@@ -93,7 +99,11 @@ public record CatalogStatus(
                     stats.parsedUpdatedAt() == null ? "" : stats.parsedUpdatedAt().toString(),
                     indexFile,
                     stats.lastError() == null ? "" : stats.lastError(),
-                    stats.databases() == null ? java.util.List.of() : stats.databases());
+                    stats.databases() == null ? java.util.List.of() : stats.databases(),
+                    stats.rowsRead(),
+                    stats.lastFilter() == null ? "" : stats.lastFilter(),
+                    stats.limit(),
+                    stats.truncated());
         }
     }
 }

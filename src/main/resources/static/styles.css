@@ -1889,6 +1889,10 @@ pre {
 
 .kv .key,
 .kv .value {
+    /* 行高由内容较高的一侧决定（例如带下拉框的值），单行文字若不设 flex 会贴在单元格顶部 */
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
     min-height: 42px;
     padding: 10px 12px;
     border-bottom: 1px solid var(--line);
