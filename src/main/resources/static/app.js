@@ -42,6 +42,9 @@ createApp({
             catalogRefreshing: false,
             catalogPanelOpen: false,
             detailLoading: false,
+            // 递增令牌：切页签/换对象后，迟到的详情响应必须被丢弃，避免"过程详情 + 表详情"同屏
+            detailToken: 0,
+            searchToken: 0,
             loadingProcedureId: "",
             detailError: "",
             detailRetryItem: null,
@@ -158,6 +161,10 @@ createApp({
             return this.catalogueRefreshHasFilter
                 ? "按当前关键字/库名/owner 刷新：目录会被这次筛选结果替换（如需全量请先清空筛选）"
                 : "全量刷新过程目录（只查过程名等元数据，不读 full_text）";
+        },
+        /** 右侧详情面板同一时刻只渲染一种对象：表优先，避免两个详情块同时出现。 */
+        procedureDetailVisible() {
+            return !this.selectedTable && Boolean(this.selectedProcedure);
         },
         /** Hint above the procedure list: single-query cap and whether the result was cut short. */
         procedureListNote() {
@@ -464,6 +471,7 @@ createApp({
         },
         async openOverview() {
             this.rememberTabState();
+            this.invalidateDetailRequests();
             if (this.activeTab === "overview") {
                 this.activeTab = "tables";
                 this.overviewQuery = "";
@@ -596,6 +604,7 @@ createApp({
         },
         async openMetric(metric) {
             this.rememberTabState();
+            this.invalidateDetailRequests();
             this.query = "";
             this.schema = "";
             this.tableType = "";
@@ -720,6 +729,7 @@ createApp({
             this.adjustments = [];
             this.adjustmentListModal = false;
             this.adjustmentModal = null;
+            this.invalidateDetailRequests();
             this.clearCaches();
         },
         async openLoginLogs() {
@@ -745,6 +755,7 @@ createApp({
             // "restore" (tab switch) falls back to the first row, a deep link does not: selecting an
             // unrelated object would be more confusing than showing "nothing found".
             const fallbackToFirst = options.fallbackToFirst === true;
+            const token = ++this.searchToken;
             this.loading = true;
             this.error = "";
             try {
@@ -756,7 +767,9 @@ createApp({
                 if (this.activeTab === "tables" && this.tableStatus) params.set("tableStatus", this.tableStatus);
                 const cacheKey = params.toString();
                 if (this.activeTab === "tables") {
-                this.tables = await this.getList("tables", cacheKey);
+                const tables = await this.getList("tables", cacheKey);
+                if (token !== this.searchToken) return;
+                this.tables = tables;
                     if (this.tables.length > 0) {
                         const selectable = this.showFavoritesOnly ? this.tables.filter(item => this.isFavorite(item)) : this.tables;
                         const selected = this.findListItem(selectable, objectId)
@@ -770,7 +783,9 @@ createApp({
                         this.selectedTable = null;
                     }
                 } else if (this.activeTab === "procedures") {
-                this.procedures = await this.fetchProcedureList(this.procedureSearchKey());
+                const procedures = await this.fetchProcedureList(this.procedureSearchKey());
+                if (token !== this.searchToken) return;
+                this.procedures = procedures;
                 if (this.procedures.length > 0) {
                         const selectable = this.showFavoritesOnly ? this.procedures.filter(item => this.isFavorite(item)) : this.procedures;
                         const selected = this.findListItem(selectable, objectId) || selectable[0];
@@ -783,16 +798,27 @@ createApp({
                         this.selectedProcedure = null;
                     }
                 } else {
-                    this.overviewTables = await this.getList("tables", "");
+                    const overviewTables = await this.getList("tables", "");
+                    if (token !== this.searchToken) return;
+                    this.overviewTables = overviewTables;
                     this.selectedTable = null;
                     this.selectedProcedure = null;
                 }
                 this.syncHistory(historyMode);
             } catch (error) {
+                if (token !== this.searchToken) return;
                 this.error = error.message;
             } finally {
-                this.loading = false;
+                if (token === this.searchToken) {
+                    this.loading = false;
+                }
             }
+        },
+        /** 切页签/换对象时作废进行中的详情读取，并清掉加载态。 */
+        invalidateDetailRequests() {
+            this.detailToken += 1;
+            this.detailLoading = false;
+            this.loadingProcedureId = "";
         },
         /** Remembers the filters of a tab, so switching back does not lose keyword/library filters. */
         rememberTabState(tab = this.activeTab) {
@@ -826,6 +852,9 @@ createApp({
             if (this.activeTab !== tab) {
                 this.rememberTabState(this.activeTab);
             }
+            // 例如正在读某个存储过程的 full_text 时切到"表"：那次读取的结果必须丢弃，
+            // 否则它返回后会把过程详情塞进表详情旁边。
+            this.invalidateDetailRequests();
             this.activeTab = tab;
             this.columnQuery = "";
             if (tab === "tables") {
@@ -843,10 +872,13 @@ createApp({
             await this.search({ history: "push", objectId: restoreId, fallbackToFirst: true });
         },
         async selectTable(table, options = {}) {
+            const token = ++this.detailToken;
             this.selectedProcedure = null;
             this.catalogProfile = null;
             this.procedureFocusLine = 0;
-            this.selectedTable = await this.getDetail("tables", table.id);
+            const detail = await this.getDetail("tables", table.id);
+            if (token !== this.detailToken) return;
+            this.selectedTable = detail;
             this.lastSelectedTableId = this.selectedTable?.table?.id || table.id;
             this.tableDetailTab = options.focusColumn ? "columns" : "basic";
             this.columnQuery = options.focusColumn || "";
@@ -858,6 +890,7 @@ createApp({
                 // Already reading this one: a second click would only start a duplicate slow request.
                 return;
             }
+            const token = ++this.detailToken;
             this.selectedTable = null;
             this.procedureFocusLine = Number(options.focusLine || 0);
             const wasUnparsed = this.isUnparsedProcedure(procedure);
@@ -875,23 +908,30 @@ createApp({
                     // Wait a little longer than the server side timeout, so the server's own 504 message
                     // arrives first instead of the browser hanging for minutes.
                     const seconds = Number(this.catalogStatus?.requestTimeoutSeconds || 60) + 15;
-                    this.catalogProfile = await this.getJson(
+                    const profile = await this.getJson(
                         `/api/catalog/procedures/${database}/${name}/profile`,
                         { timeoutMillis: seconds * 1000 });
-                    this.selectedProcedure = this.catalogProfile.analysis;
+                    if (token !== this.detailToken) return;
+                    this.catalogProfile = profile;
+                    this.selectedProcedure = profile.analysis;
                 } else {
+                    const detail = await this.getDetail("procedures", procedure.id);
+                    if (token !== this.detailToken) return;
                     this.catalogProfile = null;
-                    this.selectedProcedure = await this.getDetail("procedures", procedure.id);
+                    this.selectedProcedure = detail;
                 }
             } catch (error) {
+                if (token !== this.detailToken) return;
                 // A 504/408 means "we stopped waiting"; show it with a retry instead of a silent stall.
                 this.selectedProcedure = null;
                 this.catalogProfile = null;
                 this.detailError = error.message || "读取失败";
                 this.detailRetryItem = procedure;
             } finally {
-                this.detailLoading = false;
-                this.loadingProcedureId = "";
+                if (token === this.detailToken) {
+                    this.detailLoading = false;
+                    this.loadingProcedureId = "";
+                }
             }
             this.lastSelectedProcedureId = this.selectedProcedure?.id || procedure.id;
             if (!this.detailError && wasUnparsed) {
@@ -1809,6 +1849,7 @@ createApp({
         },
         async jumpTable(name, options = {}) {
             this.rememberTabState();
+            this.invalidateDetailRequests();
             this.activeTab = "tables";
             this.selectedProcedure = null;
             if (options.clearFilters) {
@@ -1830,6 +1871,7 @@ createApp({
         },
         async jumpProcedure(name, options = {}) {
             this.rememberTabState();
+            this.invalidateDetailRequests();
             this.activeTab = "procedures";
             this.selectedTable = null;
             if (options.clearFilters) {
@@ -2798,7 +2840,7 @@ createApp({
                             <div class="detail-subtitle" v-if="selectedTable">
                                 {{ tableSourceText(selectedTable.table, { range: true }) }}
                             </div>
-                            <div class="detail-subtitle" v-if="selectedProcedure">
+                            <div class="detail-subtitle" v-if="procedureDetailVisible">
                                 {{ procedureSourceText(selectedProcedure, { withLine: true, range: true }) }}
                             </div>
                         </div>
@@ -2806,13 +2848,13 @@ createApp({
                             <button v-if="selectedTable" class="toolbar-icon favorite-button" :class="{saved: isFavorite(selectedTable.table)}" type="button" :title="isFavorite(selectedTable.table) ? '取消收藏' : '收藏当前表'" :aria-label="isFavorite(selectedTable.table) ? '取消收藏' : '收藏当前表'" @click="toggleFavorite(selectedTable.table)">
                                 <span aria-hidden="true">{{ isFavorite(selectedTable.table) ? '★' : '☆' }}</span>
                             </button>
-                            <button v-if="selectedProcedure" class="toolbar-icon favorite-button" :class="{saved: isFavorite(selectedProcedure)}" type="button" :title="isFavorite(selectedProcedure) ? '取消收藏' : '收藏当前过程'" :aria-label="isFavorite(selectedProcedure) ? '取消收藏' : '收藏当前过程'" @click="toggleFavorite(selectedProcedure)">
+                            <button v-if="procedureDetailVisible" class="toolbar-icon favorite-button" :class="{saved: isFavorite(selectedProcedure)}" type="button" :title="isFavorite(selectedProcedure) ? '取消收藏' : '收藏当前过程'" :aria-label="isFavorite(selectedProcedure) ? '取消收藏' : '收藏当前过程'" @click="toggleFavorite(selectedProcedure)">
                                 <span aria-hidden="true">{{ isFavorite(selectedProcedure) ? '★' : '☆' }}</span>
                             </button>
                             <button v-if="selectedTable" class="adjustment-action" type="button" :class="{marked: isAdjusted('TABLE', selectedTable.table)}" @click="openAdjustmentEditor('TABLE', selectedTable.table)">
                                 {{ isAdjusted('TABLE', selectedTable.table) ? '调整中' : '标记调整' }}
                             </button>
-                            <button v-if="selectedProcedure" class="adjustment-action" type="button" :class="{marked: isAdjusted('PROCEDURE', selectedProcedure)}" @click="openAdjustmentEditor('PROCEDURE', selectedProcedure)">
+                            <button v-if="procedureDetailVisible" class="adjustment-action" type="button" :class="{marked: isAdjusted('PROCEDURE', selectedProcedure)}" @click="openAdjustmentEditor('PROCEDURE', selectedProcedure)">
                                 {{ isAdjusted('PROCEDURE', selectedProcedure) ? '调整中' : '标记调整' }}
                             </button>
                             <button v-if="selectedTable" @click="exportColumns">导出字段 CSV</button>
@@ -2825,7 +2867,7 @@ createApp({
                         <span class="tag warn" v-if="selectedTable.table.partitionedBy">分区 {{ selectedTable.table.partitionedBy }}</span>
                         <span class="tag danger" v-if="!selectedTable.table.comment">缺少表注释</span>
                     </div>
-                    <div class="tag-row" v-if="selectedProcedure">
+                    <div class="tag-row" v-if="procedureDetailVisible">
                         <span class="tag">参数 {{ selectedProcedure.parameterCount }}</span>
                         <span class="tag">目标表 {{ selectedProcedure.targetTables.length }}</span>
                         <span class="tag">来源表 {{ selectedProcedure.sourceTables.length }}</span>
@@ -2835,16 +2877,16 @@ createApp({
 
                 <div class="detail-body">
                     <div v-if="!selectedTable && !selectedProcedure && !detailLoading && !detailError" class="empty">从左侧选择表或存储过程查看详情</div>
-                    <div v-if="detailLoading" class="detail-loading">
+                    <div v-if="detailLoading && activeTab === 'procedures'" class="detail-loading">
                         <span class="spinner" aria-hidden="true"></span>
                         正在读取过程源码并解析（首次约 4~5 秒，之后走缓存；同一过程只会读取一次）…
                     </div>
-                    <div v-if="detailError" class="detail-error">
+                    <div v-if="detailError && activeTab === 'procedures'" class="detail-error">
                         <span>{{ detailError }}</span>
                         <button v-if="detailRetryItem" type="button" @click="retryDetail">重试</button>
                     </div>
 
-                    <section class="section" v-if="selectedProcedure && catalogProfile">
+                    <section class="section" v-if="procedureDetailVisible && catalogProfile">
                         <div class="section-title"><h3>数据库来源</h3></div>
                         <div class="kv">
                             <div class="key">对象</div><div class="value mono">{{ catalogProfile.qualifiedName }}</div>
@@ -3058,7 +3100,7 @@ createApp({
                         </section>
                     </template>
 
-                    <template v-if="selectedProcedure">
+                    <template v-if="procedureDetailVisible">
                         <section class="section">
                             <div class="kv">
                                 <div class="key">自定义分组</div>
